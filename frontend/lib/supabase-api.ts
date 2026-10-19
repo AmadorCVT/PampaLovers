@@ -1,3 +1,4 @@
+import { isMissingGroupColumnError, withoutGroup } from "@/lib/plot-group-compat"
 import type { SupabaseClient, User } from "@supabase/supabase-js"
 
 import { createClient } from "@/lib/supabase/client"
@@ -554,13 +555,19 @@ export async function updatePlot(
     return row
   }
 
-  const { data, error } = await supabase
-    .from("plots")
-    .update(patch)
-    .eq("id", id)
-    .in("farm_id", farmIds)
-    .select()
-    .single()
+  const runUpdate = (values: Record<string, unknown>) =>
+    supabase
+      .from("plots")
+      .update(values)
+      .eq("id", id)
+      .in("farm_id", farmIds)
+      .select()
+      .single()
+
+  let { data, error } = await runUpdate(patch)
+  if (error && isMissingGroupColumnError(error)) {
+    ;({ data, error } = await runUpdate(withoutGroup(patch)))
+  }
 
   if (error) throw error
   if (!data) throw new Error("Lote no encontrado")
@@ -712,11 +719,18 @@ export async function createPlot(input: CreatePlotInput): Promise<DbPlot> {
     throw new Error("La granja no existe o no pertenece a tu cuenta")
   }
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("plots")
     .insert(row)
     .select()
     .single()
+  if (error && isMissingGroupColumnError(error)) {
+    ;({ data, error } = await supabase
+      .from("plots")
+      .insert(withoutGroup(row))
+      .select()
+      .single())
+  }
 
   if (error) throw error
   return data

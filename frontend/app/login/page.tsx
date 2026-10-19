@@ -1,23 +1,35 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { AnimatePresence, motion } from "motion/react"
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { AuthShell, FieldIllustration } from "@/components/auth-shell"
+import { InlineMessage } from "@/components/agro-ui"
+import { spring } from "@/lib/motion"
+import { cn } from "@/lib/utils"
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import { ArrowLeft, Leaf, Loader2 } from "lucide-react"
+  ArrowRight,
+  BrainCircuit,
+  Eye,
+  EyeOff,
+  History,
+  Loader2,
+  Lock,
+  Mail,
+  Satellite,
+} from "lucide-react"
 
 type AuthMode = "login" | "register"
+
+const FEATURES = [
+  { icon: Satellite, title: "Satélite", text: "Imagen y NDVI de cada lote" },
+  { icon: BrainCircuit, title: "Predicción ML", text: "Rendimiento estimado por ciclo" },
+  { icon: History, title: "Historial", text: "Cada cosecha, con su contexto" },
+]
 
 export default function LoginPage() {
   const router = useRouter()
@@ -25,6 +37,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
+  const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
@@ -56,7 +69,6 @@ export default function LoginPage() {
     const supabase = createClient()
 
     if (mode === "login") {
-      // --- LÓGICA DE LOGIN (Sin cambios) ---
       const { error } = await supabase.auth.signInWithPassword({ email, password })
       if (error) {
         setError(translateAuthError(error.message))
@@ -70,32 +82,25 @@ export default function LoginPage() {
         router.push("/lotes")
       }
       router.refresh()
-
     } else {
-      // --- NUEVA LÓGICA DE REGISTRO ---
-      
-      // 1. Usamos supabase.auth.signUp en lugar de fetch('/api/auth/register')
       const { data, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
       })
 
-      // 2. Manejamos los errores del registro
       if (signUpError) {
         setError(translateAuthError(signUpError.message))
         setLoading(false)
         return
       }
 
-      // 3. Verificamos si la cuenta se creó pero requiere confirmación (aunque lo desactivamos, es buena práctica)
+      // Cuenta existente: Supabase devuelve un usuario sin identidades.
       if (data.user && data.user.identities && data.user.identities.length === 0) {
-         setError("Este correo ya está registrado. Intenta iniciar sesión.")
-         setLoading(false)
-         return;
+        setError("Este correo ya está registrado. Intenta iniciar sesión.")
+        setLoading(false)
+        return
       }
 
-      // 4. Si llegamos aquí, el usuario se registró y (como desactivamos la confirmación) ya debería tener sesión.
-      // Solo nos queda redirigirlo.
       const { data: farms } = await supabase.from("farms").select("id").limit(1)
       if (!farms || farms.length === 0) {
         router.push("/onboarding")
@@ -106,131 +111,234 @@ export default function LoginPage() {
     }
   }
 
-  function toggleMode() {
-    setMode(mode === "login" ? "register" : "login")
+  function switchMode(next: AuthMode) {
+    if (next === mode || loading) return
+    setMode(next)
     setError(null)
     setMessage(null)
     setConfirmPassword("")
   }
 
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-md space-y-6">
-        <Link
-          href="/"
-          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Volver al inicio
-        </Link>
+  function toggleMode() {
+    switchMode(mode === "login" ? "register" : "login")
+  }
 
-        {/* Logo */}
-        <div className="flex flex-col items-center gap-3">
-          <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary">
-            <Leaf className="h-8 w-8 text-primary-foreground" />
-          </div>
-          <div className="text-center">
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">EvoAgro</h1>
-            <p className="text-sm text-muted-foreground">
+  return (
+    <AuthShell
+      aside={
+        <>
+          <div className="max-w-xl space-y-5">
+            <motion.p
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={spring.move}
+              className="eyebrow flex items-center gap-2 text-brand"
+            >
+              <span className="size-1.5 rounded-full bg-brand" />
               Plataforma de Gestión Agrícola Inteligente
-            </p>
+            </motion.p>
+            <motion.h1
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ ...spring.move, delay: 0.06 }}
+              className="text-[clamp(2.4rem,1rem+2.4vw,3.7rem)] leading-[1.02] font-semibold tracking-[-0.04em] text-balance"
+            >
+              Tu campo, visto{" "}
+              <span className="font-display font-normal tracking-[-0.015em] text-brand italic">
+                desde el espacio.
+              </span>
+            </motion.h1>
+            <motion.p
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ ...spring.move, delay: 0.12 }}
+              className="max-w-md text-[16px] leading-relaxed text-sidebar-foreground/65"
+            >
+              Predicción de rendimientos con ML e imágenes satelitales para optimizar tu
+              producción agrícola.
+            </motion.p>
           </div>
+
+          <FieldIllustration />
+
+          <ul className="grid grid-cols-3 gap-3">
+            {FEATURES.map(({ icon: Icon, title, text }, i) => (
+              <motion.li
+                key={title}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ ...spring.move, delay: 0.2 + i * 0.05 }}
+                className="rounded-2xl bg-white/[0.04] p-4 ring-1 ring-white/[0.07] ring-inset"
+              >
+                <Icon className="size-[18px] text-brand" />
+                <p className="mt-3 text-[13.5px] font-semibold">{title}</p>
+                <p className="mt-0.5 text-[12.5px] leading-snug text-sidebar-foreground/55">
+                  {text}
+                </p>
+              </motion.li>
+            ))}
+          </ul>
+        </>
+      }
+    >
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={spring.move}
+        className="space-y-8"
+      >
+        {/* Segmented control — the pill slides between modes */}
+        <div
+          role="tablist"
+          aria-label="Modo de acceso"
+          className="grid grid-cols-2 rounded-2xl bg-muted p-1 ring-1 ring-border/60 ring-inset"
+        >
+          {(["login", "register"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              role="tab"
+              aria-selected={mode === m}
+              onClick={() => switchMode(m)}
+              disabled={loading}
+              className={cn(
+                "relative z-0 h-10 rounded-xl text-[13.5px] font-semibold transition-colors duration-200",
+                mode === m ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {mode === m ? (
+                <motion.span
+                  layoutId="auth-mode-pill"
+                  transition={spring.snappy}
+                  className="absolute inset-0 -z-10 rounded-xl bg-card shadow-soft ring-1 ring-border/50"
+                />
+              ) : null}
+              {m === "login" ? "Iniciar Sesión" : "Crear Cuenta"}
+            </button>
+          ))}
         </div>
 
-        {/* Auth Card */}
-        <Card className="border-border/60">
-          <CardHeader className="text-center">
-            <CardTitle className="text-xl">
-              {mode === "login" ? "Iniciar Sesión" : "Crear Cuenta"}
-            </CardTitle>
-            <CardDescription>
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={mode}
+            initial={{ opacity: 0, x: mode === "register" ? 12 : -12 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: mode === "register" ? -12 : 12 }}
+            transition={spring.snappy}
+            className="space-y-2"
+          >
+            <h2 className="text-[30px] font-semibold tracking-[-0.03em] text-foreground">
+              {mode === "login" ? "Bienvenido de nuevo" : "Empezá a medir tu campo"}
+            </h2>
+            <p className="text-[15px] text-muted-foreground">
               {mode === "login"
                 ? "Ingresá tus credenciales para acceder"
                 : "Completá los datos para registrarte"}
-            </CardDescription>
-          </CardHeader>
+            </p>
+          </motion.div>
+        </AnimatePresence>
 
-          <form onSubmit={handleSubmit}>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="tu@email.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  autoComplete="email"
-                  disabled={loading}
-                />
-              </div>
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <div className="space-y-2">
+            <Label htmlFor="email">Email</Label>
+            <div className="relative">
+              <Mail className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                id="email"
+                type="email"
+                placeholder="tu@email.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoComplete="email"
+                disabled={loading}
+                className="h-12 pl-10 text-[15px]"
+              />
+            </div>
+          </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="password">Contraseña</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  autoComplete={mode === "login" ? "current-password" : "new-password"}
-                  disabled={loading}
-                />
-              </div>
+          <div className="space-y-2">
+            <Label htmlFor="password">Contraseña</Label>
+            <div className="relative">
+              <Lock className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                id="password"
+                type={showPassword ? "text" : "password"}
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete={mode === "login" ? "current-password" : "new-password"}
+                disabled={loading}
+                className="h-12 pr-11 pl-10 text-[15px]"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute top-1/2 right-2 flex size-8 -translate-y-1/2 items-center justify-center rounded-lg text-muted-foreground transition-[color,background-color,transform] hover:bg-muted hover:text-foreground active:scale-90"
+                aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+                aria-pressed={showPassword}
+              >
+                {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              </button>
+            </div>
+          </div>
 
-              {mode === "register" && (
-                <div className="space-y-2">
+          <AnimatePresence initial={false}>
+            {mode === "register" && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={spring.move}
+                className="overflow-hidden"
+              >
+                <div className="space-y-2 pt-0.5 pb-0.5">
                   <Label htmlFor="confirmPassword">Confirmar Contraseña</Label>
-                  <Input
-                    id="confirmPassword"
-                    type="password"
-                    placeholder="••••••••"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    required
-                    autoComplete="new-password"
-                    disabled={loading}
-                  />
+                  <div className="relative">
+                    <Lock className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="confirmPassword"
+                      type={showPassword ? "text" : "password"}
+                      placeholder="••••••••"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      required
+                      autoComplete="new-password"
+                      disabled={loading}
+                      className="h-12 pl-10 text-[15px]"
+                    />
+                  </div>
                 </div>
-              )}
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-              {error && (
-                <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  {error}
-                </div>
-              )}
+          {error && <InlineMessage>{error}</InlineMessage>}
+          {message && <InlineMessage tone="success">{message}</InlineMessage>}
 
-              {message && (
-                <div className="rounded-md bg-accent/10 px-3 py-2 text-sm text-accent">
-                  {message}
-                </div>
-              )}
-            </CardContent>
+          <Button type="submit" className="group h-12 w-full text-[15px]" disabled={loading}>
+            {loading ? <Loader2 className="animate-spin" /> : null}
+            {mode === "login" ? "Iniciar Sesión" : "Crear Cuenta"}
+            {!loading ? (
+              <ArrowRight className="transition-transform duration-200 group-hover:translate-x-0.5" />
+            ) : null}
+          </Button>
 
-            <CardFooter className="flex flex-col gap-3">
-              <Button type="submit" className="w-full" size="lg" disabled={loading}>
-                {loading && <Loader2 className="animate-spin" />}
-                {mode === "login" ? "Iniciar Sesión" : "Crear Cuenta"}
-              </Button>
-
-              <p className="text-center text-sm text-muted-foreground">
-                {mode === "login" ? "¿No tenés cuenta?" : "¿Ya tenés cuenta?"}{" "}
-                <button
-                  type="button"
-                  onClick={toggleMode}
-                  className="font-medium text-primary underline-offset-4 hover:underline"
-                  disabled={loading}
-                >
-                  {mode === "login" ? "Registrate" : "Iniciá sesión"}
-                </button>
-              </p>
-            </CardFooter>
-          </form>
-        </Card>
-      </div>
-    </div>
+          <p className="text-center text-[13.5px] text-muted-foreground">
+            {mode === "login" ? "¿No tenés cuenta?" : "¿Ya tenés cuenta?"}{" "}
+            <button
+              type="button"
+              onClick={toggleMode}
+              className="font-semibold text-foreground underline decoration-brand decoration-2 underline-offset-4 transition-colors hover:text-brand-ink"
+              disabled={loading}
+            >
+              {mode === "login" ? "Registrate" : "Iniciá sesión"}
+            </button>
+          </p>
+        </form>
+      </motion.div>
+    </AuthShell>
   )
 }
 

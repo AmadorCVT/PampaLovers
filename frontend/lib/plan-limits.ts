@@ -71,5 +71,5 @@ export function getPlanLimits(plan: UserPlan): PlanLimits {
 }
 
 export function formatLimit(value: number): string {
-  return Number.isFinite(value) ? String(value) : "Ilimitado"
+  return Number.isFinite(value) ? value.toLocaleString("es-AR") : "Ilimitado"
 }

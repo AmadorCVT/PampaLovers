@@ -29,10 +29,10 @@ export const PAMPA_DEMO_CENTER: [number, number] = [-34.2, -61.5]
 const PAMPA_DEMO_ZOOM = 7
 
 const PLOT_STYLE = {
-  color: "#16a34a",
-  weight: 2,
-  fillColor: "#16a34a",
-  fillOpacity: 0.18,
+  color: "#c8f04a",
+  weight: 2.5,
+  fillColor: "#c8f04a",
+  fillOpacity: 0.2,
 } as const
 
 export type SatellitePlotOverlay = {
@@ -55,6 +55,8 @@ type SatelliteMapProps = {
   plots?: SatellitePlotOverlay[]
   /** Todos los polígonos del usuario para «Ir a mis lotes» y flyTo; por defecto coincide con `plots`. */
   navigationPlots?: SatellitePlotOverlay[]
+  /** Encuadra los lotes al cargarlos (y al cambiar el conjunto de lotes). */
+  autoFit?: boolean
 }
 
 function escapeHtml(text: string): string {
@@ -94,6 +96,7 @@ export const SatelliteMap = forwardRef<SatelliteMapHandle, SatelliteMapProps>(
       className,
       plots: plotsProp = [],
       navigationPlots: navigationPlotsProp,
+      autoFit = false,
     },
     ref
   ) {
@@ -211,7 +214,7 @@ export const SatelliteMap = forwardRef<SatelliteMapHandle, SatelliteMapProps>(
       } else if (!demoMarkerRef.current) {
         const m = L.circleMarker(PAMPA_DEMO_CENTER, {
           radius: 8,
-          fillColor: "#16a34a",
+          fillColor: "#c8f04a",
           color: "#fff",
           weight: 2,
           opacity: 1,
@@ -222,6 +225,24 @@ export const SatelliteMap = forwardRef<SatelliteMapHandle, SatelliteMapProps>(
         demoMarkerRef.current = m
       }
     }, [mapReady, navigationPlots.length])
+
+    // Frame the user's lots when they first load or the set of lots changes (e.g. switching
+    // field); toggling visibility keeps `navigationPlots` stable, so it never re-frames.
+    const navigationKey = navigationPlots.map((p) => p.id).join(",")
+    const lastFramedKeyRef = useRef<string | null>(null)
+    useEffect(() => {
+      const map = mapRef.current
+      const L = leafletRef.current
+      if (!autoFit || !mapReady || !map || !L) return
+      if (navigationKey === "" || lastFramedKeyRef.current === navigationKey) return
+      lastFramedKeyRef.current = navigationKey
+      const bounds = L.latLngBounds([])
+      for (const p of navigationPlotsRef.current) {
+        if (p.polygon.length > 0) extendBoundsFromPolygon(L, bounds, p.polygon)
+      }
+      if (!bounds.isValid()) return
+      map.fitBounds(bounds, { padding: [64, 64], maxZoom: 16, animate: false })
+    }, [autoFit, mapReady, navigationKey])
 
     useEffect(() => {
       const L = leafletRef.current

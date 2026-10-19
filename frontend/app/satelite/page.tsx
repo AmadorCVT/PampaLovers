@@ -1,19 +1,17 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
+import { motion } from "motion/react"
 import { DashboardLayout } from "@/components/dashboard-layout"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Plus,
   Minus,
-  Satellite,
-  Map as MapIcon,
-  Calendar,
   Crosshair,
   ChevronDown,
+  Eye,
+  EyeOff,
+  Layers,
   TriangleAlert,
 } from "lucide-react"
 import { fetchLots, type Lot } from "@/lib/supabase-api"
@@ -22,6 +20,7 @@ import {
   SatelliteMap,
   type SatelliteMapHandle,
 } from "@/components/satellite-map"
+import { MapTypeSegmented } from "@/components/lot-polygon-map-picker"
 import { Switch } from "@/components/ui/switch"
 import {
   Collapsible,
@@ -29,21 +28,40 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { cn } from "@/lib/utils"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-
-const cropColors: Record<string, string> = {
-  Soja: "bg-primary",
-  Maíz: "bg-accent",
-  Trigo: "bg-chart-3",
-  Girasol: "bg-chart-4",
-}
+import { CropTag, PageHeader } from "@/components/agro-ui"
+import { riseIn } from "@/lib/motion"
 
 function lotHasPolygon(lot: Lot): boolean {
   return !!(lot.polygon && lot.polygon.length >= 3)
 }
 
+function MapButton({
+  children,
+  label,
+  onClick,
+  disabled,
+}: {
+  children: React.ReactNode
+  label: string
+  onClick: () => void
+  disabled?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+      className="flex size-10 items-center justify-center text-foreground transition-[background-color,transform,opacity] hover:bg-foreground/[0.06] active:scale-90 disabled:opacity-35"
+    >
+      {children}
+    </button>
+  )
+}
+
 function SatelitePageInner() {
-  const { selectedFarmId } = useFarmScope()
+  const { selectedFarmId, farms } = useFarmScope()
   const mapRef = useRef<SatelliteMapHandle>(null)
   const [mapType, setMapType] = useState<"satellite" | "streets">("satellite")
   const [lots, setLots] = useState<Lot[] | null>(null)
@@ -138,279 +156,231 @@ function SatelitePageInner() {
     [lots],
   )
 
+  const selectedFarm = farms.find((f) => f.id === selectedFarmId)
+
   return (
     <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Vista Satelital</h1>
-          <p className="text-muted-foreground">
-            {selectedFarmId === "all"
-              ? "Mapa base con tus lotes dibujados cuando tengan polígono guardado en la base."
-              : "Lotes del campo seleccionado en la barra superior."}
-          </p>
-        </div>
+      <PageHeader
+        eyebrow={selectedFarm ? selectedFarm.name : "Todos los campos"}
+        title="Vista Satelital"
+        description={
+          selectedFarmId === "all"
+            ? "Mapa base con tus lotes dibujados cuando tengan polígono guardado en la base."
+            : "Lotes del campo seleccionado en la barra superior."
+        }
+      />
 
-        {showPolygonApproximationNotice ? (
-          <Alert
-            role="status"
-            className="border-amber-600/35 bg-amber-500/[0.07] text-foreground shadow-sm"
-          >
-            <TriangleAlert className="text-amber-700 dark:text-amber-500" aria-hidden />
-            <AlertTitle>Algunos lotes sin contorno guardado</AlertTitle>
-            <AlertDescription>
+      {showPolygonApproximationNotice ? (
+        <motion.div
+          {...riseIn(1)}
+          role="status"
+          className="flex gap-3 rounded-2xl bg-status-harvested/10 p-4 ring-1 ring-status-harvested/30 ring-inset"
+        >
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-status-harvested/20 text-[color-mix(in_oklch,var(--status-harvested)_60%,var(--foreground))]">
+            <TriangleAlert className="size-4" aria-hidden />
+          </span>
+          <div className="space-y-0.5">
+            <p className="text-[14px] font-semibold text-foreground">Algunos lotes sin contorno guardado</p>
+            <p className="text-[13px] leading-relaxed text-muted-foreground">
               Tenés al menos un lote cargado antes de guardar el polígono en la base: en el mapa se muestra un cuadrado
               aproximado por ubicación y superficie. Los lotes nuevos usan el trazo real que marcaste.
-            </AlertDescription>
-          </Alert>
-        ) : null}
+            </p>
+          </div>
+        </motion.div>
+      ) : null}
 
-        <div className="grid gap-6 lg:grid-cols-4">
-          <div className="relative lg:col-span-3">
-            <Card className="overflow-hidden border-border/60">
-              <div className="relative h-[600px] w-full bg-muted">
-                <SatelliteMap
-                  ref={mapRef}
-                  mapType={mapType}
-                  plots={visiblePlotsOnMap}
-                  navigationPlots={satellitePlots}
-                  className="absolute inset-0 z-0 h-full w-full [&_.leaflet-container]:h-full [&_.leaflet-container]:w-full [&_.leaflet-container]:bg-muted"
-                />
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px] lg:gap-5">
+        <motion.div
+          {...riseIn(2)}
+          className="relative isolate h-[min(72svh,720px)] min-h-[440px] overflow-hidden rounded-3xl bg-muted shadow-raised ring-1 ring-border/60"
+        >
+          <SatelliteMap
+            ref={mapRef}
+            mapType={mapType}
+            plots={visiblePlotsOnMap}
+            navigationPlots={satellitePlots}
+            autoFit
+            className="absolute inset-0 z-0 h-full w-full [&_.leaflet-container]:h-full [&_.leaflet-container]:w-full [&_.leaflet-container]:bg-muted"
+          />
 
-                <div className="pointer-events-none absolute inset-0 z-10">
-                  <div className="pointer-events-auto absolute right-4 top-4 flex flex-col gap-2">
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="secondary"
-                      className="h-10 w-10 shadow-lg bg-card border border-border"
-                      onClick={() => mapRef.current?.zoomIn()}
-                      aria-label="Acercar mapa"
-                    >
-                      <Plus className="h-5 w-5" />
-                    </Button>
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="secondary"
-                      className="h-10 w-10 shadow-lg bg-card border border-border"
-                      onClick={() => mapRef.current?.zoomOut()}
-                      aria-label="Alejar mapa"
-                    >
-                      <Minus className="h-5 w-5" />
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="secondary"
-                      className="h-auto min-w-[10rem] flex-col gap-0.5 py-2 shadow-lg bg-card border border-border px-2"
-                      disabled={satellitePlots.length === 0}
-                      onClick={() => mapRef.current?.fitToPlots()}
-                      aria-label="Centrar mapa en mis lotes"
-                    >
-                      <Crosshair className="h-4 w-4" />
-                      <span className="text-[10px] font-medium leading-tight text-center">
-                        Ir a mis lotes
-                      </span>
-                    </Button>
-                  </div>
+          <div className="pointer-events-none absolute inset-0 z-10">
+            <div className="pointer-events-auto absolute top-4 left-4">
+              <MapTypeSegmented value={mapType} onChange={setMapType} layoutId="satellite-map-type" />
+            </div>
 
-                  <div className="pointer-events-auto absolute left-4 top-4 flex gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={mapType === "satellite" ? "default" : "secondary"}
-                      onClick={() => setMapType("satellite")}
-                      className={`gap-2 shadow-lg ${mapType === "satellite" ? "bg-primary text-primary-foreground" : "bg-card"}`}
-                    >
-                      <Satellite className="h-4 w-4" />
-                      Satelital
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={mapType === "streets" ? "default" : "secondary"}
-                      onClick={() => setMapType("streets")}
-                      className={`gap-2 shadow-lg ${mapType === "streets" ? "bg-primary text-primary-foreground" : "bg-card"}`}
-                    >
-                      <MapIcon className="h-4 w-4" />
-                      Calles
-                    </Button>
-                  </div>
-
-                  <div className="pointer-events-auto absolute bottom-4 right-4 max-w-[min(100%,280px)]">
-                    <Badge
-                      variant="secondary"
-                      className="gap-1.5 bg-card/95 shadow-lg border-border text-foreground"
-                    >
-                      <Calendar className="h-3 w-3 shrink-0" />
-                      Última actualización: 26 Mar 2026, 14:32
-                    </Badge>
-                  </div>
-                </div>
+            <div className="pointer-events-auto absolute top-4 right-4 flex flex-col items-end gap-2">
+              <div className="material-thick material-edge flex flex-col divide-y divide-border/70 overflow-hidden rounded-2xl shadow-raised">
+                <MapButton label="Acercar mapa" onClick={() => mapRef.current?.zoomIn()}>
+                  <Plus className="size-[18px]" />
+                </MapButton>
+                <MapButton label="Alejar mapa" onClick={() => mapRef.current?.zoomOut()}>
+                  <Minus className="size-[18px]" />
+                </MapButton>
               </div>
-            </Card>
+            </div>
+
+            <div className="pointer-events-auto absolute bottom-4 left-4 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={satellitePlots.length === 0}
+                onClick={() => mapRef.current?.fitToPlots()}
+                aria-label="Centrar mapa en mis lotes"
+                className="flex h-10 items-center gap-2 rounded-full bg-primary pr-4 pl-3 text-[13px] font-semibold text-primary-foreground shadow-raised transition-[transform,opacity] active:scale-95 disabled:opacity-50"
+              >
+                <Crosshair className="size-4" />
+                Ir a mis lotes
+              </button>
+              <span className="material-thick material-edge numeric flex h-10 items-center gap-2 rounded-full px-3.5 text-[12.5px] font-semibold text-foreground shadow-raised">
+                <Layers className="size-3.5 text-muted-foreground" />
+                {loading ? "Cargando…" : `${visiblePlotsOnMap.length} de ${satellitePlots.length} lotes visibles`}
+              </span>
+            </div>
+          </div>
+        </motion.div>
+
+        <motion.aside {...riseIn(3)} className="surface flex max-h-[min(72svh,720px)] min-h-[320px] flex-col overflow-hidden">
+          <div className="space-y-3 border-b border-border/70 p-5">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-[16px] font-semibold text-foreground">Lotes en el mapa</h2>
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  disabled={mappablePlotIds.length === 0 || loading}
+                  onClick={showAllPlotsOnMap}
+                  className="flex h-7 items-center gap-1 rounded-full px-2.5 text-[12px] font-semibold text-muted-foreground ring-1 ring-border ring-inset transition-[color,transform] hover:text-foreground active:scale-95 disabled:opacity-40"
+                >
+                  <Eye className="size-3.5" />
+                  Mostrar todos
+                </button>
+                <button
+                  type="button"
+                  disabled={mappablePlotIds.length === 0 || loading}
+                  onClick={hideAllPlotsOnMap}
+                  className="flex h-7 items-center gap-1 rounded-full px-2.5 text-[12px] font-semibold text-muted-foreground ring-1 ring-border ring-inset transition-[color,transform] hover:text-foreground active:scale-95 disabled:opacity-40"
+                >
+                  <EyeOff className="size-3.5" />
+                  Ocultar todos
+                </button>
+              </div>
+            </div>
+            <p className="text-[12.5px] leading-snug text-muted-foreground">
+              Activá o desactivá lotes por grupo. El mapa usa el polígono guardado en la base; los lotes viejos sin
+              ese dato se muestran con una vista aproximada.
+            </p>
           </div>
 
-          <div className="space-y-4">
-            <Card className="border-border/60">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base text-foreground">Lotes en el mapa</CardTitle>
-                <p className="text-xs text-muted-foreground font-normal pt-1">
-                  Activá o desactivá lotes por grupo. El mapa usa el polígono guardado en la base; los lotes viejos sin
-                  ese dato se muestran con una vista aproximada.
-                </p>
-              </CardHeader>
-              <CardContent>
-                {loading || !lots ? (
-                  <div className="space-y-2">
-                    {Array.from({ length: 6 }).map((_, i) => (
-                      <div key={i} className="flex items-center justify-between py-1.5">
-                        <div className="flex items-center gap-2">
-                          <Skeleton className="h-5 w-8 rounded-full" />
-                          <Skeleton className="h-4 w-16" />
-                        </div>
-                        <Skeleton className="h-3 w-10" />
+          <div className="scroll-fade-b min-h-0 flex-1 overflow-y-auto p-3">
+            {loading || !lots ? (
+              <div className="space-y-2 p-1">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <Skeleton key={i} className="h-12 w-full rounded-xl" />
+                ))}
+              </div>
+            ) : lotsByGroup.length === 0 ? (
+              <p className="px-2 py-6 text-center text-sm text-muted-foreground">No hay lotes en tu cuenta.</p>
+            ) : (
+              <div className="space-y-2 pb-4">
+                {lotsByGroup.map(({ group, items }) => {
+                  const mappable = items.filter(lotHasPolygon)
+                  const groupChecked =
+                    mappable.length === 0
+                      ? true
+                      : mappable.every((l) => !hiddenPlotIds.has(l.id))
+                  const farmLabel =
+                    items.length > 0 &&
+                    Boolean(items[0].farmName) &&
+                    items.every((l) => l.farmName === items[0].farmName)
+                      ? items[0].farmName
+                      : null
+
+                  return (
+                    <Collapsible key={group} defaultOpen className="overflow-hidden rounded-2xl bg-muted/50 ring-1 ring-border/60 ring-inset">
+                      <div className="flex items-center gap-2 px-3 py-2.5">
+                        <CollapsibleTrigger className="group/trigger flex min-w-0 flex-1 items-center gap-2 text-left text-[13.5px] font-semibold text-foreground outline-none">
+                          <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform duration-300 ease-spring-fast group-data-[state=closed]/trigger:-rotate-90" />
+                          <span className="truncate">Grupo {group}</span>
+                          <span className="numeric text-[12px] font-medium text-muted-foreground">{items.length}</span>
+                          {farmLabel ? (
+                            <span className="ml-1 max-w-[8rem] truncate rounded-full bg-card px-2 py-0.5 text-[11px] font-medium text-muted-foreground ring-1 ring-border/60">
+                              {farmLabel}
+                            </span>
+                          ) : null}
+                        </CollapsibleTrigger>
+                        <Switch
+                          checked={groupChecked}
+                          disabled={mappable.length === 0}
+                          onCheckedChange={(v) => setGroupOnMap(items, v)}
+                          aria-label={
+                            mappable.length === 0
+                              ? `Grupo ${group} sin polígonos en mapa`
+                              : groupChecked
+                                ? `Ocultar todos los lotes del grupo ${group}`
+                                : `Mostrar todos los lotes del grupo ${group}`
+                          }
+                        />
                       </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 text-xs"
-                        disabled={mappablePlotIds.length === 0}
-                        onClick={showAllPlotsOnMap}
-                      >
-                        Mostrar todos
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 text-xs"
-                        disabled={mappablePlotIds.length === 0}
-                        onClick={hideAllPlotsOnMap}
-                      >
-                        Ocultar todos
-                      </Button>
-                    </div>
-                    <div className="max-h-[min(52vh,22rem)] space-y-2 overflow-y-auto pr-1">
-                      {lotsByGroup.length === 0 ? (
-                        <p className="px-1 text-sm text-muted-foreground">No hay lotes en tu cuenta.</p>
-                      ) : null}
-                      {lotsByGroup.map(({ group, items }) => {
-                        const mappable = items.filter(lotHasPolygon)
-                        const groupChecked =
-                          mappable.length === 0
-                            ? true
-                            : mappable.every((l) => !hiddenPlotIds.has(l.id))
-                        const farmLabel =
-                          items.length > 0 &&
-                          Boolean(items[0].farmName) &&
-                          items.every((l) => l.farmName === items[0].farmName)
-                            ? items[0].farmName
-                            : null
-
-                        return (
-                          <Collapsible key={group} defaultOpen className="rounded-md border border-border/60 bg-muted/20">
-                            <div className="flex items-center gap-2 border-b border-border/50 px-2 py-1.5">
-                              <CollapsibleTrigger className="flex flex-1 min-w-0 items-center gap-1.5 text-left text-sm font-medium text-foreground hover:opacity-90 [&[data-state=open]_svg]:rotate-180">
-                                <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform" />
-                                <span className="truncate">Grupo {group}</span>
-                                {farmLabel ? (
-                                  <Badge variant="secondary" className="ml-1 max-w-[8rem] truncate font-normal">
-                                    {farmLabel}
-                                  </Badge>
-                                ) : null}
-                              </CollapsibleTrigger>
-                              <Switch
-                                checked={groupChecked}
-                                disabled={mappable.length === 0}
-                                onCheckedChange={(v) => setGroupOnMap(items, v)}
-                                aria-label={
-                                  mappable.length === 0
-                                    ? `Grupo ${group} sin polígonos en mapa`
-                                    : groupChecked
-                                      ? `Ocultar todos los lotes del grupo ${group}`
-                                      : `Mostrar todos los lotes del grupo ${group}`
-                                }
-                              />
-                            </div>
-                            <CollapsibleContent>
-                              <ul className="space-y-0.5 p-1.5">
-                                {items.map((lot) => {
-                                  const mappableLot = lotHasPolygon(lot)
-                                  const onMap = mappableLot && !hiddenPlotIds.has(lot.id)
-                                  return (
-                                    <li
-                                      key={lot.id}
-                                      className={cn(
-                                        "flex items-start gap-2 rounded-md px-1.5 py-1",
-                                        mappableLot && "hover:bg-muted/80",
-                                      )}
-                                    >
-                                      <Switch
-                                        checked={onMap}
-                                        disabled={!mappableLot}
-                                        onCheckedChange={() => mappableLot && togglePlotOnMap(lot.id)}
-                                        aria-label={
-                                          mappableLot
-                                            ? onMap
-                                              ? `Ocultar ${lot.name} del mapa`
-                                              : `Mostrar ${lot.name} en el mapa`
-                                            : `${lot.name} sin polígono`
-                                        }
-                                      />
-                                      <button
-                                        type="button"
-                                        disabled={!mappableLot}
-                                        onClick={() => mappableLot && mapRef.current?.flyToLot(lot.id)}
-                                        className={cn(
-                                          "flex min-w-0 flex-1 gap-2 text-left",
-                                          !mappableLot && "cursor-not-allowed opacity-50",
-                                        )}
-                                      >
-                                        <span
-                                          className={`mt-0.5 h-2.5 w-2.5 shrink-0 rounded-sm ${cropColors[lot.crop] || "bg-muted"}`}
-                                        />
-                                        <span className="min-w-0 flex-1 space-y-0.5">
-                                          <span className="block break-words text-sm font-medium text-foreground">
-                                            {lot.name}
-                                          </span>
-                                          <span className="block break-words text-xs text-muted-foreground">
-                                            {lot.crop}
-                                          </span>
-                                        </span>
-                                      </button>
-                                      <Button
-                                        type="button"
-                                        size="icon"
-                                        variant="ghost"
-                                        className="h-8 w-8 shrink-0"
-                                        disabled={!mappableLot}
-                                        aria-label={`Centrar mapa en ${lot.name}`}
-                                        onClick={() => mapRef.current?.flyToLot(lot.id)}
-                                      >
-                                        <Crosshair className="h-4 w-4" />
-                                      </Button>
-                                    </li>
-                                  )
-                                })}
-                              </ul>
-                            </CollapsibleContent>
-                          </Collapsible>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                      <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
+                        <ul className="space-y-0.5 px-1.5 pb-1.5">
+                          {items.map((lot) => {
+                            const mappableLot = lotHasPolygon(lot)
+                            const onMap = mappableLot && !hiddenPlotIds.has(lot.id)
+                            return (
+                              <li
+                                key={lot.id}
+                                className={cn(
+                                  "flex items-center gap-2.5 rounded-xl bg-card px-2.5 py-2 transition-opacity duration-200",
+                                  !onMap && mappableLot && "opacity-60",
+                                )}
+                              >
+                                <Switch
+                                  checked={onMap}
+                                  disabled={!mappableLot}
+                                  onCheckedChange={() => mappableLot && togglePlotOnMap(lot.id)}
+                                  aria-label={
+                                    mappableLot
+                                      ? onMap
+                                        ? `Ocultar ${lot.name} del mapa`
+                                        : `Mostrar ${lot.name} en el mapa`
+                                      : `${lot.name} sin polígono`
+                                  }
+                                />
+                                <button
+                                  type="button"
+                                  disabled={!mappableLot}
+                                  onClick={() => mappableLot && mapRef.current?.flyToLot(lot.id)}
+                                  className={cn(
+                                    "min-w-0 flex-1 text-left",
+                                    !mappableLot && "cursor-not-allowed opacity-50",
+                                  )}
+                                >
+                                  <span className="block truncate text-[13.5px] font-semibold text-foreground">
+                                    {lot.name}
+                                  </span>
+                                  <CropTag crop={lot.crop} className="text-[12px] font-normal text-muted-foreground" />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={!mappableLot}
+                                  aria-label={`Centrar mapa en ${lot.name}`}
+                                  onClick={() => mapRef.current?.flyToLot(lot.id)}
+                                  className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-[background-color,color,transform] hover:bg-accent hover:text-foreground active:scale-90 disabled:opacity-30"
+                                >
+                                  <Crosshair className="size-4" />
+                                </button>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      </CollapsibleContent>
+                    </Collapsible>
+                  )
+                })}
+              </div>
+            )}
           </div>
-        </div>
+        </motion.aside>
       </div>
+    </div>
   )
 }
 

@@ -2,8 +2,10 @@
 
 import { useEffect, useRef, useState } from "react"
 import type { LayerGroup, Map as LeafletMap, TileLayer } from "leaflet"
-import { Map as MapIcon, Satellite } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { motion } from "motion/react"
+import { Eraser, Map as MapIcon, Satellite, Undo2 } from "lucide-react"
+import { spring } from "@/lib/motion"
+import { cn } from "@/lib/utils"
 import {
   ESRI_ATTRIBUTION,
   ESRI_TILES,
@@ -14,6 +16,8 @@ import {
 import "leaflet/dist/leaflet.css"
 
 const MAX_POINTS = 4
+/** Chlorophyll — reads clearly over both satellite imagery and street tiles. */
+const LOT_COLOR = "#c8f04a"
 
 export type LngLatTuple = [number, number]
 
@@ -28,9 +32,9 @@ type LotPolygonMapPickerProps = {
 function vertexIcon(L: typeof import("leaflet"), index: number) {
   return L.divIcon({
     className: "lot-vertex-marker border-0 bg-transparent",
-    html: `<div style="background:#16a34a;color:#fff;border:2px solid #fff;border-radius:9999px;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,0.35)">${index + 1}</div>`,
-    iconSize: [22, 22],
-    iconAnchor: [11, 11],
+    html: `<div style="background:${LOT_COLOR};color:#1d2a12;border:2.5px solid #fff;border-radius:9999px;width:26px;height:26px;display:flex;align-items:center;justify-content:center;font:700 12px/1 var(--font-geist),system-ui,sans-serif;box-shadow:0 4px 12px rgba(0,0,0,0.4)">${index + 1}</div>`,
+    iconSize: [26, 26],
+    iconAnchor: [13, 13],
   })
 }
 
@@ -138,17 +142,17 @@ export function LotPolygonMapPicker({
     })
 
     if (points.length >= 2 && points.length < 3) {
-      L.polyline(latLngs, { color: "#16a34a", weight: 2, opacity: 0.9 }).addTo(
+      L.polyline(latLngs, { color: LOT_COLOR, weight: 2.5, opacity: 0.95, dashArray: "6 6" }).addTo(
         fg
       )
     }
 
     if (points.length >= 3) {
       L.polygon(latLngs, {
-        color: "#16a34a",
-        weight: 2,
-        fillColor: "#16a34a",
-        fillOpacity: 0.18,
+        color: LOT_COLOR,
+        weight: 2.5,
+        fillColor: LOT_COLOR,
+        fillOpacity: 0.22,
       }).addTo(fg)
     }
   }, [points, mapReady])
@@ -165,57 +169,110 @@ export function LotPolygonMapPicker({
   }, [active, mapReady])
 
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-2">
-        <Button
-          type="button"
-          size="sm"
-          variant={mapType === "satellite" ? "default" : "outline"}
-          onClick={() => setMapType("satellite")}
-          className="gap-2"
-          aria-pressed={mapType === "satellite"}
-        >
-          <Satellite className="h-4 w-4 shrink-0" aria-hidden />
-          Satelital
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant={mapType === "streets" ? "default" : "outline"}
-          onClick={() => setMapType("streets")}
-          className="gap-2"
-          aria-pressed={mapType === "streets"}
-        >
-          <MapIcon className="h-4 w-4 shrink-0" aria-hidden />
-          Calles
-        </Button>
-      </div>
+    <div className="relative">
       <div
         ref={containerRef}
-        className={className}
-        style={{ minHeight: 280, height: 280, width: "100%" }}
+        className={cn("cursor-crosshair", className)}
+        style={{ minHeight: 340, height: 340, width: "100%" }}
         aria-label="Mapa para marcar vértices del lote"
       />
-      <div className="flex flex-wrap gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => onPointsChange([])}
-          disabled={points.length === 0}
-        >
-          Limpiar puntos
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => onPointsChange(points.slice(0, -1))}
-          disabled={points.length === 0}
-        >
-          Deshacer último
-        </Button>
+
+      {/* Map type — floating segmented control */}
+      <div className="absolute top-3 right-3 z-10">
+        <MapTypeSegmented value={mapType} onChange={setMapType} layoutId="picker-map-type" />
       </div>
+
+      {/* Vertex progress + edits */}
+      <div className="material-thick material-edge absolute bottom-3 left-3 z-10 flex items-center gap-1 rounded-2xl p-1 pl-3 shadow-raised">
+        <div className="flex items-center gap-1.5 pr-1" aria-live="polite">
+          {Array.from({ length: MAX_POINTS }).map((_, i) => (
+            <motion.span
+              key={i}
+              animate={{
+                scale: i < points.length ? 1 : 0.7,
+                backgroundColor: i < points.length ? LOT_COLOR : "rgba(127,127,127,0.35)",
+              }}
+              transition={spring.snappy}
+              className="size-2.5 rounded-full"
+            />
+          ))}
+          <span className="numeric ml-1.5 text-[12px] font-semibold text-foreground">
+            <span className="hidden sm:inline">Puntos marcados: </span>{points.length} / {MAX_POINTS}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={() => onPointsChange(points.slice(0, -1))}
+          aria-label="Deshacer último"
+          disabled={points.length === 0}
+          className="flex h-8 items-center gap-1.5 rounded-xl px-2.5 text-[12px] font-semibold text-foreground transition-[background-color,transform,opacity] hover:bg-foreground/[0.07] active:scale-95 disabled:opacity-35"
+        >
+          <Undo2 className="size-3.5" />
+          <span className="hidden sm:inline">Deshacer último</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onPointsChange([])}
+          aria-label="Limpiar puntos"
+          disabled={points.length === 0}
+          className="flex h-8 items-center gap-1.5 rounded-xl px-2.5 text-[12px] font-semibold text-foreground transition-[background-color,transform,opacity] hover:bg-foreground/[0.07] active:scale-95 disabled:opacity-35"
+        >
+          <Eraser className="size-3.5" />
+          <span className="hidden sm:inline">Limpiar puntos</span>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** Shared by the picker and the satellite page. */
+export function MapTypeSegmented({
+  value,
+  onChange,
+  layoutId,
+}: {
+  value: "satellite" | "streets"
+  onChange: (v: "satellite" | "streets") => void
+  layoutId: string
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Tipo de mapa"
+      className="material-thick material-edge flex rounded-full p-1 shadow-raised"
+    >
+      {(
+        [
+          { v: "satellite", label: "Satelital", icon: Satellite },
+          { v: "streets", label: "Calles", icon: MapIcon },
+        ] as const
+      ).map(({ v, label, icon: Icon }) => {
+        const active = value === v
+        return (
+          <button
+            key={v}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            aria-pressed={active}
+            onClick={() => onChange(v)}
+            className={cn(
+              "relative z-0 flex h-8 items-center gap-1.5 rounded-full px-3 text-[12.5px] font-semibold transition-colors duration-200 active:scale-95",
+              active ? "text-primary-foreground" : "text-foreground/70 hover:text-foreground",
+            )}
+          >
+            {active ? (
+              <motion.span
+                layoutId={layoutId}
+                transition={spring.snappy}
+                className="absolute inset-0 -z-10 rounded-full bg-primary shadow-soft"
+              />
+            ) : null}
+            <Icon className="size-3.5 shrink-0" aria-hidden />
+            {label}
+          </button>
+        )
+      })}
     </div>
   )
 }
