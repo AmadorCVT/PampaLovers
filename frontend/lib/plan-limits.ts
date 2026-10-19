@@ -35,6 +35,37 @@ export const PLAN_LIMITS: Record<UserPlan, PlanLimits> = {
   },
 }
 
+export const PLAN_ORDER: UserPlan[] = ["free", "premium", "pro"]
+
+export const PLAN_AUDIENCE_SUBTITLE: Partial<Record<UserPlan, string>> = {
+  premium: "Orientado a terratenientes",
+  pro: "Pensado para aseguradoras",
+}
+
+export const PLAN_FEATURES: Record<UserPlan, string[]> = {
+  free: [
+    "Hasta 5 lotes",
+    "1 granja",
+    "50 hectáreas totales",
+    "Vista satelital básica",
+  ],
+  premium: [
+    "Hasta 30 lotes",
+    "Hasta 5 granjas",
+    "Hasta 3.000 hectáreas totales",
+    "Vista satelital avanzada",
+    "Predicciones ML",
+  ],
+  pro: [
+    "Lotes ilimitados",
+    "Hasta 30 granjas",
+    "Hasta 20.000 hectáreas totales",
+    "Vista satelital avanzada",
+    "Predicciones ML prioritarias",
+    "Soporte dedicado",
+  ],
+}
+
 export function getPlanLimits(plan: UserPlan): PlanLimits {
   return PLAN_LIMITS[plan] ?? PLAN_LIMITS[DEFAULT_USER_PLAN]
 }
