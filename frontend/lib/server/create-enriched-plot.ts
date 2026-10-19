@@ -1,3 +1,4 @@
+import { isMissingGroupColumnError, withoutGroup } from "@/lib/plot-group-compat"
 import { type User } from "@supabase/supabase-js"
 
 import { getPlanLimits, type UserPlan } from "@/lib/plan-limits"
@@ -140,7 +141,14 @@ export async function createEnrichedPlot(
   const cropDiseaseStatus = normalizeString(body.crop_disease_status)
   if (cropDiseaseStatus) row.crop_disease_status = cropDiseaseStatus
 
-  const { data, error } = await supabase.from("plots").insert(row).select().single()
+  let { data, error } = await supabase.from("plots").insert(row).select().single()
+  if (error && isMissingGroupColumnError(error)) {
+    ;({ data, error } = await supabase
+      .from("plots")
+      .insert(withoutGroup(row))
+      .select()
+      .single())
+  }
 
   if (error) throw new Error(error.message)
 
