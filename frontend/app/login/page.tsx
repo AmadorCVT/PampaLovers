@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { AnimatePresence, motion } from "motion/react"
 import { createClient } from "@/lib/supabase/client"
@@ -41,6 +41,13 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+
+  // La landing enlaza a /login?mode=register para abrir directo el registro.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("mode") === "register") {
+      setMode("register")
+    }
+  }, [])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()

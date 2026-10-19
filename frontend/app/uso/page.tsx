@@ -19,42 +19,14 @@ import {
   PLAN_LIMITS,
   formatLimit,
   getPlanLimits,
+  PLAN_AUDIENCE_SUBTITLE,
+  PLAN_FEATURES,
+  PLAN_ORDER,
 } from "@/lib/plan-limits"
 import { AnimatedNumber } from "@/components/animated-number"
 import { PageHeader } from "@/components/agro-ui"
 import { riseIn, spring } from "@/lib/motion"
 import { cn } from "@/lib/utils"
-
-const PLAN_ORDER: UserPlan[] = ["free", "premium", "pro"]
-
-const PLAN_AUDIENCE_SUBTITLE: Partial<Record<UserPlan, string>> = {
-  premium: "Orientado a terratenientes",
-  pro: "Pensado para aseguradoras",
-}
-
-const PLAN_FEATURES: Record<UserPlan, string[]> = {
-  free: [
-    "Hasta 5 lotes",
-    "1 granja",
-    "50 hectáreas totales",
-    "Vista satelital básica",
-  ],
-  premium: [
-    "Hasta 30 lotes",
-    "Hasta 5 granjas",
-    "Hasta 3.000 hectáreas totales",
-    "Vista satelital avanzada",
-    "Predicciones ML",
-  ],
-  pro: [
-    "Lotes ilimitados",
-    "Hasta 30 granjas",
-    "Hasta 20.000 hectáreas totales",
-    "Vista satelital avanzada",
-    "Predicciones ML prioritarias",
-    "Soporte dedicado",
-  ],
-}
 
 function usagePercent(current: number, max: number): number {
   if (!Number.isFinite(max) || max <= 0) return 0

@@ -1,6 +1,7 @@
 "use client"
 
 import type { ReactNode } from "react"
+import Link from "next/link"
 import { motion } from "motion/react"
 import { Crosshair } from "lucide-react"
 import { BrandMark, BrandWordmark } from "@/components/brand-mark"
@@ -139,20 +140,24 @@ export function AuthShell({
           aria-hidden
           className="field-lines pointer-events-none absolute inset-0 -z-10 text-brand opacity-25 [mask-image:radial-gradient(80%_60%_at_20%_100%,black,transparent)]"
         />
-        <div className="flex items-center gap-3">
+        <Link href="/" aria-label="EvoAgro, volver al inicio" className="flex w-fit items-center gap-3">
           <BrandMark />
           <BrandWordmark className="text-sidebar-foreground" />
-        </div>
+        </Link>
         <div className="flex min-h-0 flex-1 flex-col justify-center gap-7 pt-8">{aside}</div>
       </aside>
 
       {/* Form column */}
       <main className="relative flex flex-1 flex-col">
         <div className="flex items-center justify-between p-5 sm:p-6">
-          <div className="flex items-center gap-2.5 lg:invisible">
+          <Link
+            href="/"
+            aria-label="EvoAgro, volver al inicio"
+            className="flex items-center gap-2.5 lg:invisible"
+          >
             <BrandMark className="size-8 rounded-[10px]" />
             <BrandWordmark />
-          </div>
+          </Link>
           <ThemeToggle tone="surface" className="w-[108px]" layoutId="auth-theme" />
         </div>
         <div className="flex flex-1 items-center justify-center px-5 pb-16 sm:px-8">

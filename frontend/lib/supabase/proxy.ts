@@ -3,7 +3,9 @@ import { type NextRequest, NextResponse } from "next/server"
 
 import { getSupabaseBrowserEnv } from "@/lib/supabase/config"
 
-const PUBLIC_ROUTES = ["/login"]
+const AUTH_ROUTES = ["/login"]
+/** Rutas abiertas a todo visitante (la landing), con o sin sesión. */
+const OPEN_ROUTES = ["/"]
 
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({
@@ -34,7 +36,8 @@ export async function updateSession(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
 
   const pathname = request.nextUrl.pathname
-  const isPublicRoute = PUBLIC_ROUTES.some((route) => pathname.startsWith(route))
+  const isAuthRoute = AUTH_ROUTES.some((route) => pathname.startsWith(route))
+  const isPublicRoute = isAuthRoute || OPEN_ROUTES.includes(pathname)
 
   if (!user && !isPublicRoute) {
     const loginUrl = request.nextUrl.clone()
@@ -42,9 +45,9 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(loginUrl)
   }
 
-  if (user && isPublicRoute) {
+  if (user && isAuthRoute) {
     const homeUrl = request.nextUrl.clone()
-    homeUrl.pathname = "/"
+    homeUrl.pathname = "/lotes"
     return NextResponse.redirect(homeUrl)
   }
 
