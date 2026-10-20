@@ -9,6 +9,7 @@ import {
   parseLotPolygon,
   polygonToGeoJson,
 } from "@/lib/server/plot-external-data"
+import { predictAndStorePlotYield, type PlotPredictionResult } from "@/lib/server/yield-prediction"
 
 const PLOT_STATUSES = new Set(["Sembrado", "Crecimiento", "Cosechado", "Barbecho"])
 
@@ -37,6 +38,7 @@ export interface EnrichedPlotCreationResult {
     appliedFields: string[]
     warnings: string[]
   }
+  prediction: PlotPredictionResult
 }
 
 interface SupabaseLike {
@@ -152,8 +154,21 @@ export async function createEnrichedPlot(
 
   if (error) throw new Error(error.message)
 
+  // El lote ya está guardado: si la predicción falla, se informa pero no se revierte la creación.
+  let prediction: PlotPredictionResult
+  try {
+    prediction = await predictAndStorePlotYield(supabase, data)
+  } catch (predictionError) {
+    prediction = {
+      predictedKgHa: null,
+      reason:
+        predictionError instanceof Error ? predictionError.message : "No se pudo predecir el rinde.",
+    }
+  }
+
   return {
     plot: data,
+    prediction,
     enrichment: {
       dateFrom: enrichment.dateFrom,
       dateTo: enrichment.dateTo,

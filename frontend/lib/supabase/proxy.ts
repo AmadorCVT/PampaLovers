@@ -38,8 +38,11 @@ export async function updateSession(request: NextRequest) {
   const pathname = request.nextUrl.pathname
   const isAuthRoute = AUTH_ROUTES.some((route) => pathname.startsWith(route))
   const isPublicRoute = isAuthRoute || OPEN_ROUTES.includes(pathname)
+  // Las API routes validan su propia autenticación (sesión o secreto) y responden JSON:
+  // redirigirlas a /login rompería llamadas sin sesión como el cron de entrenamiento.
+  const isApiRoute = pathname.startsWith("/api/")
 
-  if (!user && !isPublicRoute) {
+  if (!user && !isPublicRoute && !isApiRoute) {
     const loginUrl = request.nextUrl.clone()
     loginUrl.pathname = "/login"
     return NextResponse.redirect(loginUrl)

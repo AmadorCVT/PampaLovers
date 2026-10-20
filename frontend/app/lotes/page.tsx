@@ -73,6 +73,7 @@ import {
   deletePlot,
   harvestPlot,
   startPlotNewCycle,
+  requestPlotPrediction,
   type Lot,
   type DbPlot,
 } from "@/lib/supabase-api"
@@ -302,6 +303,8 @@ function LotesPageInner() {
   const [editSaving, setEditSaving] = useState(false)
   const [editName, setEditName] = useState("")
   const [editCrop, setEditCrop] = useState("")
+  /** Cultivo al abrir el editor: si cambia, se recalcula la predicción. */
+  const [editOriginalCrop, setEditOriginalCrop] = useState("")
   const [editArea, setEditArea] = useState("")
   const [editStatus, setEditStatus] = useState<DbPlot["status"]>("Sembrado")
   const [editDescription, setEditDescription] = useState("")
@@ -384,11 +387,12 @@ function LotesPageInner() {
         return
       }
       setEditName(row.name)
-      setEditCrop(
+      const initialCrop =
         CROP_TYPES.find((c) => cropKey(c) === cropKey(row.crop_type)) ??
-          row.crop_type ??
-          "",
-      )
+        row.crop_type ??
+        ""
+      setEditCrop(initialCrop)
+      setEditOriginalCrop(initialCrop)
       setEditArea(
         row.area_ha != null && Number(row.area_ha) > 0
           ? String(row.area_ha)
@@ -446,6 +450,9 @@ function LotesPageInner() {
         notes: editNotes.trim() || null,
         group: parsedGroup,
       })
+      if (editCrop.trim() && cropKey(editCrop) !== cropKey(editOriginalCrop)) {
+        await requestPlotPrediction(editId).catch(() => null)
+      }
       toast.success("Lote actualizado")
       closeEdit()
       await refreshLots()

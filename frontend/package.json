@@ -8,7 +8,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "test:create-enriched-plot": "npx tsx scripts/test-create-enriched-plot.ts"
+    "test:create-enriched-plot": "npx tsx scripts/test-create-enriched-plot.ts",
+    "test:yield-model": "npx tsx scripts/test-yield-model.ts && npx tsx scripts/test-yield-prediction-flow.ts",
+    "ml:train": "npx tsx --env-file=.env.local scripts/train-yield-model.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

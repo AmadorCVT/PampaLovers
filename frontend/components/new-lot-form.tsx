@@ -221,7 +221,12 @@ export function NewLotForm({
         crop_disease_status: formData.cropDiseaseStatus || undefined,
       })
 
-      toast.success("Lote creado")
+      const predictedKgHa = result.prediction?.predictedKgHa
+      toast.success(
+        predictedKgHa != null
+          ? `Lote creado · rinde estimado ${predictedKgHa.toLocaleString("es-AR")} kg/ha`
+          : "Lote creado",
+      )
       if (result.enrichment.warnings.length > 0) {
         toast.info(
           `El lote se guardó, pero faltaron métricas automáticas. ${result.enrichment.warnings.join(" ")}`,

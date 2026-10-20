@@ -7,6 +7,12 @@ import {
   DEFAULT_USER_PLAN,
   getPlanLimits,
 } from "@/lib/plan-limits"
+import {
+  encodeCrop,
+  encodeDisease,
+  encodeFertilizer,
+  encodeIrrigation,
+} from "@/lib/yield-features"
 
 /** Horas de sol por defecto hasta tener una fuente confiable. */
 const DEFAULT_SUNLIGHT_HOURS = 8
@@ -603,6 +609,8 @@ export interface CreatePlotWithEnrichmentResult {
     appliedFields: string[]
     warnings: string[]
   }
+  /** Rinde estimado guardado en `plot_prediction`, o por qué no se pudo calcular. */
+  prediction?: { predictedKgHa: number | null; reason?: string }
 }
 
 function roundGeographicCoord(value: number, decimals: number): number {
@@ -1312,59 +1320,6 @@ export async function getSoilMetrics(plotId: string): Promise<SoilMetric[]> {
 // LOGS (tabla public.logs — campos numéricos para ML / histórico)
 // ──────────────────────────────────────────────
 
-const LOG_CROP_CODES = [
-  "Soja",
-  "Maíz",
-  "Trigo",
-  "Girasol",
-  "Sorgo",
-  "Cebada",
-  "Arroz",
-  "Algodón",
-] as const
-
-const IRRIGATION_LOG: Record<string, number> = {
-  Drip: 1,
-  Sprinkle: 2,
-  Manual: 3,
-  None: 0,
-}
-
-const FERTILIZER_LOG: Record<string, number> = {
-  Organic: 1,
-  Inorganic: 2,
-  Mixed: 3,
-  None: 0,
-}
-
-const DISEASE_LOG: Record<string, number> = {
-  None: 0,
-  Mild: 1,
-  Moderate: 2,
-  Severe: 3,
-}
-
-function cropLabelToLogNumeric(crop: string | null | undefined): number {
-  if (!crop?.trim()) return 0
-  const i = LOG_CROP_CODES.indexOf(crop.trim() as (typeof LOG_CROP_CODES)[number])
-  return i >= 0 ? i + 1 : 0
-}
-
-function irrigationToLogNumeric(v: string | null | undefined): number {
-  if (!v?.trim()) return 0
-  return IRRIGATION_LOG[v.trim()] ?? 0
-}
-
-function fertilizerToLogNumeric(v: string | null | undefined): number {
-  if (!v?.trim()) return 0
-  return FERTILIZER_LOG[v.trim()] ?? 0
-}
-
-function diseaseToLogNumeric(v: string | null | undefined): number {
-  if (!v?.trim()) return 0
-  return DISEASE_LOG[v.trim()] ?? 0
-}
-
 /** Fila para `public.logs` al cosechar (snapshot del plot + datos ingresados). */
 function buildLogsRowFromHarvest(
   plot: DbPlot,
@@ -1373,7 +1328,7 @@ function buildLogsRowFromHarvest(
 ): Record<string, unknown> {
   return {
     plot_id: plot.id,
-    crop_type: cropLabelToLogNumeric(plot.crop_type),
+    crop_type: encodeCrop(plot.crop_type),
     soil_moisture:
       plot.soil_moisture_percent != null ? Number(plot.soil_moisture_percent) : 0,
     soil_ph: plot.soil_ph != null ? Number(plot.soil_ph) : 0,
@@ -1382,15 +1337,15 @@ function buildLogsRowFromHarvest(
     humidity_percent:
       plot.humidity_percent != null ? Number(plot.humidity_percent) : 0,
     sunlight_hours: DEFAULT_SUNLIGHT_HOURS,
-    irrigation_type: irrigationToLogNumeric(plot.irrigation_type),
-    fertilizer_type: fertilizerToLogNumeric(plot.fertilizer_type),
+    irrigation_type: encodeIrrigation(plot.irrigation_type),
+    fertilizer_type: encodeFertilizer(plot.fertilizer_type),
     pesticide_usage_ml:
       plot.pesticide_usage_ml != null ? Number(plot.pesticide_usage_ml) : 0,
     sowing_date: plot.sowing_date,
     harvest_date: harvestDate,
     yield_kg_per_hectare: yieldKgPerHa,
     ndvi_index: plot.ndvi_index != null ? Number(plot.ndvi_index) : 0.1,
-    crop_disease_status: diseaseToLogNumeric(plot.crop_disease_status),
+    crop_disease_status: encodeDisease(plot.crop_disease_status),
   }
 }
 
@@ -1430,7 +1385,7 @@ export async function startPlotNewCycle(
       ? input.pesticide_usage_ml
       : null
 
-  return updatePlot(plotId, {
+  const updated = await updatePlot(plotId, {
     crop_type: crop,
     sowing_date: sd,
     status: "Sembrado",
@@ -1441,6 +1396,21 @@ export async function startPlotNewCycle(
     crop_disease_status: input.crop_disease_status?.trim() || null,
     sunlight_hours: DEFAULT_SUNLIGHT_HOURS,
   })
+  // Cultivo nuevo = rinde nuevo. Si no hay modelo todavía, el ciclo arranca igual.
+  await requestPlotPrediction(plotId).catch(() => null)
+  return updated
+}
+
+/**
+ * Pide al servidor que recalcule y guarde la predicción de rinde del lote.
+ * Devuelve los kg/ha estimados, o `null` si no se pudo (sin modelo entrenado, sin cultivo...).
+ */
+export async function requestPlotPrediction(plotId: string): Promise<number | null> {
+  const response = await fetch(`/api/plots/${encodeURIComponent(plotId)}/prediction`, {
+    method: "POST",
+  })
+  const parsed = tryParseJson(await response.text()) as { predictedKgHa?: unknown } | null
+  return typeof parsed?.predictedKgHa === "number" ? parsed.predictedKgHa : null
 }
 
 // ──────────────────────────────────────────────
