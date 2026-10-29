@@ -3,6 +3,9 @@ import assert from "node:assert/strict"
 import regionalYields from "../data/regional-yields.json"
 import { estimateRegionalYield, type RegionalYieldData } from "../lib/ml/regional-yield"
 import { lookupAdminLocation, type AdminLocation } from "../lib/server/georef"
+import { fetchSeasonWeather } from "../lib/server/weather"
+import weatherModel from "../data/weather-model.json"
+import type { MonthlyWeather, WeatherModelData } from "../lib/ml/weather-effect"
 import {
   clearYieldModelCache,
   loadYieldModel,
@@ -133,6 +136,24 @@ async function main() {
   }) as typeof fetch
   assert.equal(await lookupAdminLocation(-31.1, -64.2, downFetch), null)
 
+  // 0b. NASA POWER: suma por mes, descarta meses incompletos (días con -999 o sin publicar).
+  const daily: Record<string, number> = {}
+  const dailyTemp: Record<string, number> = {}
+  for (let d = 1; d <= 31; d++) {
+    daily[`202612${String(d).padStart(2, "0")}`] = 2
+    dailyTemp[`202612${String(d).padStart(2, "0")}`] = 25
+  }
+  for (let d = 1; d <= 20; d++) {
+    daily[`202701${String(d).padStart(2, "0")}`] = d === 5 ? -999 : 1
+    dailyTemp[`202701${String(d).padStart(2, "0")}`] = 27
+  }
+  const powerFetch = (async () =>
+    new Response(JSON.stringify({ properties: { parameter: { PRECTOTCORR: daily, T2M: dailyTemp } } }))) as typeof fetch
+  const months = await fetchSeasonWeather("2", 2026, -33.84, -60.54, { now: new Date("2027-01-25T12:00:00Z"), fetchImpl: powerFetch })
+  assert.deepEqual([...months.keys()], ["202612"], "enero está incompleto y tiene un día sin dato")
+  assert.deepEqual(months.get("202612"), { rain: 62, temp: 25 })
+  assert.equal((await fetchSeasonWeather("2", 2026, -33.84, -60.54, { now: new Date("2026-08-01T00:00:00Z"), fetchImpl: powerFetch })).size, 0, "antes de la temporada no consulta")
+
   // 1. Sin cosechas propias: predice igual, con el rinde regional del departamento del lote.
   const db = new FakeSupabase()
   db.tables.set("logs", [])
@@ -143,18 +164,67 @@ async function main() {
     { id: "ya-predicho", crop_type: "Trigo", status: "Sembrado", latitude: -33.9, longitude: -60.6 },
   ])
   db.tables.set("plot_prediction", [{ plot_id: "ya-predicho", ml_predicted_kg_ha: 4100 }])
-  const deps = { admin: db as never, locate }
+  // Sin clima observado todavía (recién sembrado): el ajuste queda casi neutro.
+  const noWeather = async () => new Map<string, MonthlyWeather>()
+  const deps = { admin: db as never, locate, seasonWeather: noWeather }
 
   clearYieldModelCache()
   const first = await trainAndStoreYieldModel(deps)
   assert.equal(first.model, null, "menos de 20 cosechas: no hay modelo por lote")
-  assert.equal(first.backfilled, 2, "maíz y soja; el barbecho no tiene cultivo y el trigo ya tenía predicción")
+  assert.equal(first.updatedPredictions, 3, "maíz, soja y trigo (cambió); el barbecho no tiene cultivo")
   const prediction = (id: string) =>
     db.tables.get("plot_prediction")!.filter((p) => p.plot_id === id).at(-1)!.ml_predicted_kg_ha as number
   const maizPergamino = expectedRegional(2, "06623", "2026/27")
   const sojaRivadavia = expectedRegional(1, "86154", "2026/27")
-  assert.equal(prediction("maiz-pergamino"), maizPergamino)
-  assert.equal(prediction("soja-rivadavia"), sojaRivadavia)
+  // La base usa la historia "sin clima" y el ajuste arranca casi neutro: cerca del regional simple.
+  const near = (value: number, target: number, tolerance: number) => Math.abs(value / target - 1) < tolerance
+  assert.ok(near(prediction("maiz-pergamino"), maizPergamino, 0.15), `${prediction("maiz-pergamino")} vs ${maizPergamino}`)
+  assert.ok(near(prediction("soja-rivadavia"), sojaRivadavia, 0.15), `${prediction("soja-rivadavia")} vs ${sojaRivadavia}`)
+  // En Pergamino la sequía 2022/23 (4800 kg/ha) deja de deprimir la base al sacarle el clima.
+  assert.ok(prediction("maiz-pergamino") > maizPergamino, "la base sin clima no arrastra la sequía pasada")
+  console.log(`maíz Pergamino 2026/27 con clima normal: ${prediction("maiz-pergamino")} kg/ha (regional simple ${maizPergamino})`)
+
+  // Recalcular sin cambios no duplica el historial.
+  const historyBefore = db.tables.get("plot_prediction")!.length
+  assert.equal((await trainAndStoreYieldModel(deps)).updatedPredictions, 0)
+  assert.equal(db.tables.get("plot_prediction")!.length, historyBefore)
+
+  // Sequía en el período crítico (diciembre y enero con 15 % de la lluvia normal): baja la predicción.
+  const normals = (weatherModel as unknown as WeatherModelData).departments["06623"]
+  const drought = async (_crop: string, startYear: number) =>
+    new Map<string, MonthlyWeather>(
+      [
+        [`${startYear}10`, 9],
+        [`${startYear}11`, 10],
+        [`${startYear}12`, 11],
+        [`${startYear + 1}01`, 0],
+      ].map(([key, m]) => [
+        key as string,
+        { rain: normals.rainNormal[m as number] * 0.15, temp: normals.tempNormal[m as number] + 1.5 },
+      ]),
+    )
+  const droughtResult = await predictAndStorePlotYield(
+    db as never,
+    { id: "maiz-seco", crop_type: "Maíz", sowing_date: "2026-09-20", latitude: -33.9, longitude: -60.6 },
+    { ...deps, seasonWeather: drought },
+  )
+  assert.ok(droughtResult.predictedKgHa !== null && droughtResult.basis.weather)
+  console.log(
+    `maíz Pergamino con sequía: ${droughtResult.predictedKgHa} kg/ha (factor ${droughtResult.basis.weather.factor}, ${droughtResult.basis.weather.observedMonths} meses observados)`,
+  )
+  assert.ok(droughtResult.basis.weather.factor < 0.9, "una sequía en floración baja el rinde esperado")
+  assert.equal(droughtResult.basis.weather.observedMonths, 4)
+
+  // NASA caída: se predice igual, sin ajuste por clima.
+  const nasaDown = async () => {
+    throw new Error("timeout")
+  }
+  const withoutNasa = await predictAndStorePlotYield(
+    db as never,
+    { id: "maiz-sin-nasa", crop_type: "Maíz", sowing_date: "2026-09-20", latitude: -33.9, longitude: -60.6 },
+    { ...deps, seasonWeather: nasaDown },
+  )
+  assert.ok(withoutNasa.predictedKgHa !== null && withoutNasa.basis.weather === null)
   console.log(`regional 2026/27: maíz Pergamino ${maizPergamino} kg/ha · soja Rivadavia ${sojaRivadavia} kg/ha`)
   assert.ok(maizPergamino > 7000 && maizPergamino < 11000, "maíz en Pergamino en el rango real de la zona")
   assert.ok(sojaRivadavia > 1500 && sojaRivadavia < 4000)
@@ -221,7 +291,7 @@ async function main() {
   assert.ok(drip.predictedKgHa !== null && drip.basis.method === "regional+lotes")
   console.log(`maíz Pergamino 2026/27: goteo ${kgHa(drip)} · manual ${kgHa(dry)} · regional ${maizPergamino} kg/ha`)
   assert.ok(Math.abs(kgHa(drip) / kgHa(dry) - 1.25) < 0.08, "el goteo rinde ~25% más que el manual")
-  assert.ok(Math.abs(kgHa(dry) / maizPergamino - 1) < 0.08, "sin goteo, cerca del regional")
+  assert.ok(Math.abs(kgHa(dry) / maizPergamino - 1) < 0.12, "sin goteo, cerca del regional")
 
   console.log("test-yield-prediction-flow: OK")
 }

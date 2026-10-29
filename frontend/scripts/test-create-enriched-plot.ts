@@ -190,6 +190,20 @@ async function main() {
       })
     }
 
+    // Predicción de rinde: ubicación del lote (Georef) y clima de la campaña (NASA POWER).
+    if (url.startsWith("https://apis.datos.gob.ar/georef/api/ubicacion")) {
+      return jsonResponse({
+        ubicacion: {
+          departamento: { id: "06854", nombre: "25 de Mayo" },
+          provincia: { id: "06", nombre: "Buenos Aires" },
+        },
+      })
+    }
+
+    if (url.startsWith("https://power.larc.nasa.gov/api/temporal/daily/point")) {
+      return jsonResponse({ properties: { parameter: { PRECTOTCORR: {}, T2M: {} } } })
+    }
+
     throw new Error(`Unexpected fetch call: ${method} ${url}`)
   }) as typeof fetch
 
@@ -232,7 +246,8 @@ async function main() {
 
     assert.ok(insertedPlot, "Debe existir una fila insertada en plots")
 
-    assert.equal(calls.length, 5, "Deben ejecutarse 5 llamadas EOS en el flujo polygon")
+    const eosCalls = calls.filter((call) => call.url.startsWith("https://api-connect.eos.com"))
+    assert.equal(eosCalls.length, 5, "Deben ejecutarse 5 llamadas EOS en el flujo polygon")
     assert.ok(
       calls.some(
         (call) =>
@@ -279,6 +294,10 @@ async function main() {
       "temperature_c",
     ])
     assert.deepEqual(result.enrichment.warnings, [])
+    assert.ok(result.prediction.predictedKgHa !== null, "Debe predecir el rinde del lote nuevo")
+    assert.equal(result.prediction.basis.level, "departamento")
+    assert.equal(result.prediction.basis.areaName, "25 de Mayo")
+    assert.deepEqual(supabase.rowsFor("plot_prediction").map((row) => row.plot_id), [insertedPlot.id])
     assert.ok("geoJSON" in insertedPlot, "La fila insertada debe incluir geoJSON")
     assert.ok("polygon" in insertedPlot, "La fila insertada debe incluir polygon")
 

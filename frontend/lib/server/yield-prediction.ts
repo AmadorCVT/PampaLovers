@@ -1,12 +1,15 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 
 import regionalYieldsJson from "@/data/regional-yields.json"
+import weatherModelJson from "@/data/weather-model.json"
 import {
   campaignForDate,
+  campaignStartYear,
   estimateRegionalYield,
   type RegionalEstimate,
   type RegionalYieldData,
 } from "@/lib/ml/regional-yield"
+import { logWeatherEffect, weatherFeatures, type MonthlyWeather, type WeatherModelData } from "@/lib/ml/weather-effect"
 import {
   parseYieldModel,
   predictYieldKgHa,
@@ -15,19 +18,48 @@ import {
   type YieldModel,
 } from "@/lib/ml/yield-model"
 import { lookupAdminLocation, type AdminLocation } from "@/lib/server/georef"
+import { fetchSeasonWeather } from "@/lib/server/weather"
 import { createSupabaseAdminClient } from "@/lib/supabase/admin"
 import { encodeCrop, featuresFromLog, featuresFromPlot } from "@/lib/yield-features"
 
 /**
- * Predicción de rinde en dos capas:
+ * Predicción de rinde en tres capas:
  * 1. Regional (siempre): rinde esperable del cultivo en el departamento del lote para su campaña,
  *    calculado con las Estimaciones Agrícolas del MAGyP (`data/regional-yields.json`).
  * 2. Por lote (opcional): red neuronal entrenada con las cosechas reales de la app (`logs`), que
  *    recibe el regional como variable y aprende cuánto se desvía cada lote. Solo se usa si en
  *    validación mejora al regional solo.
+ * 3. Clima de la campaña (`data/weather-model.json`): ajusta según la lluvia y temperatura ya
+ *    observadas del período crítico (NASA POWER). Arranca neutro al sembrar y se define a medida
+ *    que avanza la campaña: por eso las predicciones se recalculan cada semana.
  */
 
-const REGIONAL_DATA = regionalYieldsJson as unknown as RegionalYieldData
+const WEATHER_MODEL_RAW = weatherModelJson as unknown as WeatherModelData
+
+/** El ajuste por clima se entrenó contra estos datos regionales; si se regeneraron, no aplica. */
+const WEATHER_MODEL: WeatherModelData | null =
+  WEATHER_MODEL_RAW.regionalGeneratedAt === (regionalYieldsJson as unknown as RegionalYieldData).generatedAt
+    ? WEATHER_MODEL_RAW
+    : null
+
+/**
+ * Base regional sobre la historia "sin clima" (si hay modelo de clima): una sequía pasada no debe
+ * bajar el esperable de las campañas siguientes, el clima de cada campaña se aplica aparte.
+ */
+const REGIONAL_DATA: RegionalYieldData = (() => {
+  const plain = regionalYieldsJson as unknown as RegionalYieldData
+  if (!WEATHER_MODEL) return plain
+  const crops = Object.fromEntries(
+    Object.entries(plain.crops).map(([crop, series]) => {
+      const deweathered = WEATHER_MODEL.deweatheredYields[crop] ?? {}
+      const departments = Object.fromEntries(
+        Object.entries(series.departments).map(([id, d]) => [id, { ...d, yields: deweathered[id] ?? d.yields }]),
+      )
+      return [crop, { ...series, departments }]
+    }),
+  )
+  return { ...plain, crops }
+})()
 
 /** Mismo bucket que usaba el backend Python para `model-1.keras`. */
 const MODEL_BUCKET = "models"
@@ -44,6 +76,13 @@ export interface PredictionDeps {
   admin?: SupabaseClient
   /** Ubicación administrativa de un punto. Por defecto, la API Georef. */
   locate?: (latitude: number, longitude: number) => Promise<AdminLocation | null>
+  /** Clima observado de la temporada ("AAAAMM" → mes). Por defecto, NASA POWER. */
+  seasonWeather?: (
+    crop: string,
+    campaignStartYear: number,
+    latitude: number,
+    longitude: number,
+  ) => Promise<Map<string, MonthlyWeather>>
 }
 
 let cachedModel: { model: YieldModel | null; loadedAt: number } | null = null
@@ -218,12 +257,13 @@ export interface TrainingResult {
   samples: number
   /** La red mejora al regional en validación y se usa al predecir. */
   lotModelInUse: boolean
-  backfilled: number
+  /** Lotes con una predicción nueva o distinta de la anterior. */
+  updatedPredictions: number
 }
 
 /**
- * Entrena el modelo por lote con las cosechas registradas (si alcanzan), lo guarda y completa la
- * predicción de los lotes que todavía no tenían.
+ * Entrena el modelo por lote con las cosechas registradas (si alcanzan), lo guarda y recalcula la
+ * predicción de todos los lotes activos (con el clima observado hasta hoy).
  */
 export async function trainAndStoreYieldModel(deps: PredictionDeps = {}): Promise<TrainingResult> {
   const admin = deps.admin ?? requireAdminClient()
@@ -236,8 +276,8 @@ export async function trainAndStoreYieldModel(deps: PredictionDeps = {}): Promis
     cachedModel = { model, loadedAt: Date.now() }
   }
 
-  const backfilled = await backfillMissingPredictions(admin, model, deps)
-  return { model, samples: samples.length, lotModelInUse: lotModelIsUseful(model), backfilled }
+  const updatedPredictions = await refreshPredictions(admin, model, deps)
+  return { model, samples: samples.length, lotModelInUse: lotModelIsUseful(model), updatedPredictions }
 }
 
 /* ───────────── Predicción ───────────── */
@@ -248,11 +288,41 @@ export interface PredictionBasis {
   /** Departamento, provincia o "Argentina", según el nivel con datos. */
   areaName: string
   campaign: string
+  /** Ajuste por el clima ya observado de la campaña, o `null` si no aplica / no hubo dato. */
+  weather: { factor: number; observedMonths: number } | null
 }
 
 export type PlotPredictionResult =
   | { predictedKgHa: number; basis: PredictionBasis }
   | { predictedKgHa: null; reason: string }
+
+/** Factor multiplicativo por el clima observado de la campaña en el departamento. */
+async function weatherAdjustment(
+  crop: number,
+  campaign: string,
+  location: AdminLocation | null,
+  deps: PredictionDeps,
+): Promise<PredictionBasis["weather"]> {
+  const departmentId = location?.departmentId
+  const normals = departmentId ? WEATHER_MODEL?.departments[departmentId] : undefined
+  const coefficients = WEATHER_MODEL?.coefficients[String(crop)]
+  if (!WEATHER_MODEL || !normals || !coefficients) return null
+
+  const startYear = campaignStartYear(campaign)
+  let observed: Map<string, MonthlyWeather>
+  try {
+    observed = await (deps.seasonWeather ?? fetchSeasonWeather)(String(crop), startYear, normals.lat, normals.lon)
+  } catch {
+    return null // NASA no respondió: se predice sin ajuste y se reintenta en el próximo recálculo
+  }
+
+  const features = weatherFeatures(String(crop), startYear, normals, (year, month) =>
+    observed.get(`${year}${String(month).padStart(2, "0")}`) ?? null,
+  )
+  if (!features) return null
+  const factor = Math.exp(WEATHER_MODEL.scale * logWeatherEffect(coefficients, features.x))
+  return { factor: Number(factor.toFixed(4)), observedMonths: features.observedMonths }
+}
 
 async function predictForPlot(
   model: YieldModel | null,
@@ -271,16 +341,20 @@ async function predictForPlot(
     return { predictedKgHa: null, reason: "No hay datos regionales para este cultivo." }
   }
 
-  const basis: PredictionBasis = {
-    method: "regional",
-    level: regional.level,
-    areaName: regional.areaName,
-    campaign,
-  }
-  if (!lotModelIsUseful(model)) return { predictedKgHa: regional.kgHa, basis }
+  const weather = await weatherAdjustment(crop, campaign, location, deps)
+  const useLotModel = lotModelIsUseful(model)
+  const base = useLotModel ? predictYieldKgHa(model, featuresFromPlot(plot, regional.kgHa)) : regional.kgHa
 
-  const kgHa = predictYieldKgHa(model, featuresFromPlot(plot, regional.kgHa))
-  return { predictedKgHa: Math.round(kgHa), basis: { ...basis, method: "regional+lotes" } }
+  return {
+    predictedKgHa: Math.max(0, Math.round(base * (weather?.factor ?? 1))),
+    basis: {
+      method: useLotModel ? "regional+lotes" : "regional",
+      level: regional.level,
+      areaName: regional.areaName,
+      campaign,
+      weather,
+    },
+  }
 }
 
 /**
@@ -303,8 +377,14 @@ export async function predictAndStorePlotYield(
   return result
 }
 
-/** Lotes con cultivo en curso que nunca recibieron una predicción. */
-async function backfillMissingPredictions(
+/** Un cambio menor a esto no amerita una fila nueva en el historial. */
+const MIN_RELATIVE_CHANGE = 0.01
+
+/**
+ * Recalcula todos los lotes con cultivo en curso (corre cada semana con el cron) y agrega una fila
+ * al historial cuando la predicción es nueva o cambió: así refleja el clima que va llegando.
+ */
+async function refreshPredictions(
   admin: SupabaseClient,
   model: YieldModel | null,
   deps: PredictionDeps,
@@ -317,25 +397,36 @@ async function backfillMissingPredictions(
   if (error) throw new Error(`No se pudieron leer los lotes: ${error.message}`)
   if (!plots?.length) return 0
 
-  // En tandas: cada id viaja en la URL del filtro `in`.
-  const predicted = new Set<string>()
+  // Última predicción de cada lote. En tandas: cada id viaja en la URL del filtro `in`.
+  const latest = new Map<string, { value: number; at: string }>()
   for (let i = 0; i < plots.length; i += 200) {
     const { data: existing, error: existingError } = await admin
       .from("plot_prediction")
-      .select("plot_id")
+      .select("plot_id, ml_predicted_kg_ha, created_at")
       .in(
         "plot_id",
         plots.slice(i, i + 200).map((p) => p.id),
       )
     if (existingError) throw new Error(`No se pudieron leer las predicciones: ${existingError.message}`)
-    for (const row of existing ?? []) predicted.add(row.plot_id)
+    for (const row of existing ?? []) {
+      const previous = latest.get(row.plot_id)
+      const at = String(row.created_at ?? "")
+      if (!previous || at >= previous.at) latest.set(row.plot_id, { value: Number(row.ml_predicted_kg_ha), at })
+    }
   }
 
-  const pending = plots.filter((plot) => !predicted.has(plot.id))
-  const results = await mapWithConcurrency(pending, LOCATE_CONCURRENCY, (plot) => predictForPlot(model, plot, deps))
-  const rows = pending
+  const results = await mapWithConcurrency(plots, LOCATE_CONCURRENCY, (plot) => predictForPlot(model, plot, deps))
+  const rows = plots
     .map((plot, i) => ({ plot_id: plot.id, ml_predicted_kg_ha: results[i].predictedKgHa }))
-    .filter((row) => row.ml_predicted_kg_ha !== null)
+    .filter((row): row is { plot_id: string; ml_predicted_kg_ha: number } => {
+      if (row.ml_predicted_kg_ha === null) return false
+      const previous = latest.get(row.plot_id)?.value
+      return (
+        previous === undefined ||
+        !Number.isFinite(previous) ||
+        Math.abs(row.ml_predicted_kg_ha - previous) / Math.max(previous, 1) >= MIN_RELATIVE_CHANGE
+      )
+    })
 
   if (rows.length === 0) return 0
   const { error: insertError } = await admin.from("plot_prediction").insert(rows)

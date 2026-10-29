@@ -1,13 +1,13 @@
 /**
  * Entrena el modelo por lote con las cosechas de `public.logs` (si hay al menos 20), lo sube a
- * Supabase Storage y completa la predicción (regional) de los lotes que no tenían.
+ * Supabase Storage y recalcula la predicción de todos los lotes activos (regional + clima).
  * Uso (desde frontend/, con .env.local completo): npm run ml:train
  */
 import { MIN_TRAINING_SAMPLES, trainAndStoreYieldModel } from "../lib/server/yield-prediction"
 
 async function main() {
   const started = Date.now()
-  const { model, samples, lotModelInUse, backfilled } = await trainAndStoreYieldModel()
+  const { model, samples, lotModelInUse, updatedPredictions } = await trainAndStoreYieldModel()
 
   console.log(`Cosechas con rinde en logs: ${samples}`)
   if (!model) {
@@ -27,7 +27,7 @@ async function main() {
         : "  No mejora al regional: se sigue prediciendo solo con el rinde regional.",
     )
   }
-  console.log(`Predicciones nuevas para lotes sin predicción: ${backfilled}`)
+  console.log(`Lotes con predicción nueva o actualizada: ${updatedPredictions}`)
 }
 
 main().catch((error) => {
