@@ -610,7 +610,12 @@ export interface CreatePlotWithEnrichmentResult {
     warnings: string[]
   }
   /** Rinde estimado guardado en `plot_prediction`, o por qué no se pudo calcular. */
-  prediction?: { predictedKgHa: number | null; reason?: string }
+  prediction?: {
+    predictedKgHa: number | null
+    reason?: string
+    /** De dónde sale la estimación (zona usada y si se ajustó con cosechas propias). */
+    basis?: { method: string; level: string; areaName: string; campaign: string }
+  }
 }
 
 function roundGeographicCoord(value: number, decimals: number): number {

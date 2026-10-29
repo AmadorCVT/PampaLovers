@@ -46,20 +46,87 @@ Por defecto escucha en `http://localhost:3000`.
 
 ## Predicción de rinde (ML)
 
-La predicción corre dentro de la app de Next.js (`frontend/`), sin servicios aparte:
+La predicción corre dentro de la app de Next.js (`frontend/`), sin servicios aparte, en tres capas:
 
-- **Modelo**: red neuronal densa (32 → 16 → 1) en TypeScript puro, en `frontend/lib/ml/yield-model.ts`.
-  Las variables y su codificación están en `frontend/lib/yield-features.ts`.
-- **Datos de entrenamiento**: todas las cosechas de la tabla `logs` (se agrega una fila cada vez que se
-  cosecha un lote desde la app). Se necesitan al menos 20 cosechas con rinde.
-- **Dónde se guarda**: Supabase Storage, bucket `models`, archivo `yield-model.json` (el bucket se crea
-  solo si no existe).
-- **Cuándo se predice**: al crear un lote, al iniciar un nuevo ciclo y al cambiarle el cultivo. El
-  resultado se guarda en `plot_prediction` (con historial). Si todavía no hay modelo, el lote se crea
-  igual, sin predicción.
+1. **Regional (siempre activa)**: rinde esperable del cultivo en el departamento del lote para su
+   campaña, calculado con las **Estimaciones Agrícolas del MAGyP** (rinde real por cultivo, campaña
+   y departamento, 2000/01 en adelante). El lote se ubica en su departamento con la API pública de
+   Georreferenciación (`apis.datos.gob.ar/georef`); si no se puede ubicar, se usa la provincia o el
+   promedio nacional. Código: `frontend/lib/ml/regional-yield.ts`; datos procesados:
+   `frontend/data/regional-yields.json`.
+2. **Por lote (cuando hay cosechas propias)**: red neuronal (32 → 16 → 1, `frontend/lib/ml/yield-model.ts`)
+   entrenada con las cosechas de la tabla `logs`, que recibe el rinde regional como variable y aprende
+   cuánto se desvía cada lote (riego, fertilización, NDVI, etc.). Se necesitan al menos 20 cosechas y
+   solo se usa si en validación mejora al regional solo.
+3. **Clima de la campaña**: ajusta según la lluvia y la temperatura ya observadas del período crítico
+   del cultivo (p. ej. diciembre–enero para maíz, enero–febrero para soja), comparadas con lo normal
+   del departamento. El clima sale de NASA POWER (diario, público, sin clave; ~1 semana de demora).
+   Los meses que todavía no pasaron se completan con lo normal, así que el ajuste arranca neutro al
+   sembrar y se define a medida que avanza la campaña. Código: `frontend/lib/ml/weather-effect.ts`
+   y `frontend/lib/server/weather.ts`; modelo: `frontend/data/weather-model.json`.
 
-Para entrenar (o re-entrenar) el modelo hay dos formas. Ambas, además, predicen los lotes que todavía
-no tenían predicción:
+La predicción se calcula al crear un lote, al iniciar un nuevo ciclo y al cambiarle el cultivo, y se
+**recalcula cada semana** para todos los lotes activos (cron de Vercel sobre `/api/ml/train`): cuando
+cambia, se agrega una fila a `plot_prediction`, así el historial muestra cómo evoluciona con el clima.
+Predecir no necesita credenciales extra; el recálculo semanal y el entrenamiento usan
+`SUPABASE_SERVICE_ROLE_KEY`.
+
+### Qué tan buena es la capa regional
+
+Evaluada prediciendo campañas que el método no vio (2022/23 – 2025/26), con error ponderado por
+superficie:
+
+| Método | Error |
+|---|---|
+| Modelo regional | 23,0 % (±873 kg/ha) |
+| Promedio del departamento, últimas 5 campañas | 22,0 % |
+| Igual que la campaña anterior | 26,0 % |
+| Promedio nacional del cultivo | 27,3 % |
+
+En campañas normales el error es de 11–20 %; en la sequía 2022/23 sube a ~40 % para todos los
+métodos que solo miran el pasado. Frente al promedio simple, la ventaja del modelo regional es la
+cobertura: da un valor razonable aunque el departamento tenga pocas campañas o ninguna.
+
+### Qué agrega el clima
+
+Evaluado igual (coeficientes con campañas hasta 2021/22; qué fracción del efecto aplicar, elegida
+con 2016/17–2021/22 sin mirar la evaluación), con la campaña completa ya observada:
+
+| Campaña | Solo regional | Con clima |
+|---|---|---|
+| 2022/23 (sequía) | 41,0 % | 35,4 % |
+| 2023/24 | 20,4 % | 21,1 % |
+| 2024/25 | 14,5 % | 14,5 % |
+| 2025/26 (cultivos de invierno) | 25,0 % | 21,7 % |
+| **Total** | **24,1 %** | **22,6 %** |
+
+Y en los cultivos de verano 2025/26, que el modelo no vio (clima diario de NASA, como en la app):
+maíz 15,9 % → 14,0 %, girasol 13,4 % → 13,3 %, sorgo 13,6 % → 13,2 %.
+
+La mejora es moderada en promedio y se concentra en los años extremos. Se aplica a mitad de efecto
+porque con el efecto completo la sequía mejora más (41 % → 24 %) pero los años normales empeoran: el
+clima mensual en una grilla de ~50 km capta los extremos y mete ruido en lo demás.
+
+### Actualizar los datos del MAGyP
+
+Descargar de [datosestimaciones.magyp.gob.ar](https://datosestimaciones.magyp.gob.ar) el CSV de todos
+los cultivos a nivel departamento y, desde `frontend/`:
+
+```bash
+npm run data:regional -- /ruta/a/Estimaciones.csv
+```
+
+Regenera `data/regional-yields.json` y vuelve a correr la evaluación. Después hay que regenerar el
+modelo de clima (depende de esos datos; si no coinciden, la app no aplica el ajuste por clima):
+
+```bash
+npm run data:weather   # descarga ~340 puntos de NASA POWER (con caché en .cache/) y reajusta
+```
+
+### Entrenar el modelo por lote y recalcular predicciones
+
+Con `SUPABASE_SERVICE_ROLE_KEY` configurada. Además de entrenar (si hay al menos 20 cosechas),
+recalcula la predicción de todos los lotes activos con el clima observado hasta hoy:
 
 ```bash
 # Desde frontend/, con .env.local completo
@@ -71,9 +138,10 @@ npm run ml:train
 curl -X POST https://TU-DOMINIO/api/ml/train -H "Authorization: Bearer $ML_ADMIN_SECRET"
 ```
 
-En Vercel, si se define `CRON_SECRET`, el modelo se re-entrena solo todos los lunes (`vercel.json`).
+En Vercel, si se define `CRON_SECRET`, esto corre solo todos los lunes (`vercel.json`). Sin
+`CRON_SECRET`, las predicciones no se actualizan con el clima después de crear el lote.
 
-Tests del modelo: `npm run test:yield-model`.
+Tests: `npm run test:yield-model`.
 
 ## Backend (legacy)
 
