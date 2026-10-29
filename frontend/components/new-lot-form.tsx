@@ -222,9 +222,10 @@ export function NewLotForm({
       })
 
       const predictedKgHa = result.prediction?.predictedKgHa
+      const zone = result.prediction?.basis?.areaName
       toast.success(
         predictedKgHa != null
-          ? `Lote creado · rinde estimado ${predictedKgHa.toLocaleString("es-AR")} kg/ha`
+          ? `Lote creado · rinde estimado ${predictedKgHa.toLocaleString("es-AR")} kg/ha${zone ? ` (${zone})` : ""}`
           : "Lote creado",
       )
       if (result.enrichment.warnings.length > 0) {

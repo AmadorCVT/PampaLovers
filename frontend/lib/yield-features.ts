@@ -84,6 +84,8 @@ export const NUMERIC_FEATURES = [
   "pesticide_usage_ml",
   "total_days",
   "ndvi_index",
+  /** Rinde esperable de la zona (MAGyP) para ese cultivo y campaña: el modelo aprende el desvío del lote. */
+  "regional_kg_ha",
 ] as const
 
 export type NumericFeature = (typeof NUMERIC_FEATURES)[number]
@@ -100,6 +102,7 @@ const ZERO_MEANS_MISSING = new Set<NumericFeature>([
   "humidity_percent",
   "sunlight_hours",
   "total_days",
+  "regional_kg_ha",
 ])
 
 /** Categóricos: código numérico (0 = sin dato) y cantidad de categorías para one-hot. */
@@ -146,7 +149,10 @@ function toCode(value: unknown, max: number): number {
 }
 
 /** Fila de `public.logs` (categóricos ya numéricos; ciclo = siembra → cosecha). */
-export function featuresFromLog(row: Record<string, unknown>): YieldFeatures {
+export function featuresFromLog(
+  row: Record<string, unknown>,
+  regionalKgHa: number | null = null,
+): YieldFeatures {
   return {
     categorical: {
       crop: toCode(row.crop_type, CATEGORICAL_FEATURES.crop),
@@ -167,6 +173,7 @@ export function featuresFromLog(row: Record<string, unknown>): YieldFeatures {
         row.total_days ?? daysBetween(row.sowing_date, row.harvest_date),
       ),
       ndvi_index: cleanNumeric("ndvi_index", row.ndvi_index),
+      regional_kg_ha: cleanNumeric("regional_kg_ha", regionalKgHa),
     },
   }
 }
@@ -175,7 +182,10 @@ export function featuresFromLog(row: Record<string, unknown>): YieldFeatures {
  * Fila de `public.plots` (categóricos en texto). La duración del ciclo todavía no se conoce
  * mientras el lote crece: si `total_days` no está cargado, el modelo usa la típica del cultivo.
  */
-export function featuresFromPlot(plot: Record<string, unknown>): YieldFeatures {
+export function featuresFromPlot(
+  plot: Record<string, unknown>,
+  regionalKgHa: number | null = null,
+): YieldFeatures {
   return {
     categorical: {
       crop: encodeCrop(plot.crop_type as string | null),
@@ -193,6 +203,7 @@ export function featuresFromPlot(plot: Record<string, unknown>): YieldFeatures {
       pesticide_usage_ml: cleanNumeric("pesticide_usage_ml", plot.pesticide_usage_ml),
       total_days: cleanNumeric("total_days", plot.total_days),
       ndvi_index: cleanNumeric("ndvi_index", plot.ndvi_index),
+      regional_kg_ha: cleanNumeric("regional_kg_ha", regionalKgHa),
     },
   }
 }

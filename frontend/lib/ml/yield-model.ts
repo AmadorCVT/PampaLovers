@@ -1,5 +1,5 @@
 /**
- * Modelo de rinde (kg/ha): red neuronal densa 26 → 32 → 16 → 1 con ReLU, entrenada con Adam.
+ * Modelo de rinde (kg/ha): red neuronal densa 27 → 32 → 16 → 1 con ReLU, entrenada con Adam.
  * Misma arquitectura que el backend Python original, pero en TypeScript puro para correr en las
  * API routes de Next (Vercel) sin TensorFlow. Agrega lo que al original le faltaba: one-hot de
  * categóricos, imputación + normalización de variables numéricas, validación y early stopping.
@@ -28,6 +28,11 @@ export interface YieldModelMetrics {
   maeKgHa: number
   /** Error de predecir siempre el promedio: el modelo sirve si mejora esto. */
   baselineMaeKgHa: number
+  /**
+   * Error de usar directamente el rinde esperable de la zona (variable `regional_kg_ha`), sobre
+   * las mismas filas. Si el modelo no lo mejora, conviene quedarse con el regional.
+   */
+  regionalMaeKgHa: number | null
   r2: number
   /** Filas reservadas para medir; 0 = muy pocos datos, métricas sobre entrenamiento. */
   validationSamples: number
@@ -366,7 +371,13 @@ export function trainYieldModel(
     targetMean,
     targetStd,
     layers,
-    metrics: { maeKgHa: 0, baselineMaeKgHa: 0, r2: 0, validationSamples: validation.length },
+    metrics: {
+      maeKgHa: 0,
+      baselineMaeKgHa: 0,
+      regionalMaeKgHa: null,
+      r2: 0,
+      validationSamples: validation.length,
+    },
   }
 
   const evaluation = validation.length > 0 ? validation : training
@@ -379,6 +390,12 @@ export function trainYieldModel(
   model.metrics.baselineMaeKgHa =
     actual.reduce((a, b) => a + Math.abs(b - targetMean), 0) / actual.length
   model.metrics.r2 = totalSquares > 0 ? 1 - residualSquares / totalSquares : 0
+  const withRegional = evaluation.filter((s) => s.features.numeric.regional_kg_ha !== null)
+  if (withRegional.length > 0) {
+    model.metrics.regionalMaeKgHa =
+      withRegional.reduce((a, s) => a + Math.abs(s.yieldKgHa - (s.features.numeric.regional_kg_ha as number)), 0) /
+      withRegional.length
+  }
 
   return model
 }

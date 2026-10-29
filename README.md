@@ -46,20 +46,54 @@ Por defecto escucha en `http://localhost:3000`.
 
 ## Predicción de rinde (ML)
 
-La predicción corre dentro de la app de Next.js (`frontend/`), sin servicios aparte:
+La predicción corre dentro de la app de Next.js (`frontend/`), sin servicios aparte, en dos capas:
 
-- **Modelo**: red neuronal densa (32 → 16 → 1) en TypeScript puro, en `frontend/lib/ml/yield-model.ts`.
-  Las variables y su codificación están en `frontend/lib/yield-features.ts`.
-- **Datos de entrenamiento**: todas las cosechas de la tabla `logs` (se agrega una fila cada vez que se
-  cosecha un lote desde la app). Se necesitan al menos 20 cosechas con rinde.
-- **Dónde se guarda**: Supabase Storage, bucket `models`, archivo `yield-model.json` (el bucket se crea
-  solo si no existe).
-- **Cuándo se predice**: al crear un lote, al iniciar un nuevo ciclo y al cambiarle el cultivo. El
-  resultado se guarda en `plot_prediction` (con historial). Si todavía no hay modelo, el lote se crea
-  igual, sin predicción.
+1. **Regional (siempre activa)**: rinde esperable del cultivo en el departamento del lote para su
+   campaña, calculado con las **Estimaciones Agrícolas del MAGyP** (rinde real por cultivo, campaña
+   y departamento, 2000/01 en adelante). El lote se ubica en su departamento con la API pública de
+   Georreferenciación (`apis.datos.gob.ar/georef`); si no se puede ubicar, se usa la provincia o el
+   promedio nacional. Código: `frontend/lib/ml/regional-yield.ts`; datos procesados:
+   `frontend/data/regional-yields.json`.
+2. **Por lote (cuando hay cosechas propias)**: red neuronal (32 → 16 → 1, `frontend/lib/ml/yield-model.ts`)
+   entrenada con las cosechas de la tabla `logs`, que recibe el rinde regional como variable y aprende
+   cuánto se desvía cada lote (riego, fertilización, NDVI, etc.). Se necesitan al menos 20 cosechas y
+   solo se usa si en validación mejora al regional solo.
 
-Para entrenar (o re-entrenar) el modelo hay dos formas. Ambas, además, predicen los lotes que todavía
-no tenían predicción:
+La predicción se calcula al crear un lote, al iniciar un nuevo ciclo y al cambiarle el cultivo, y se
+guarda en `plot_prediction` (con historial). La capa regional no necesita credenciales extra.
+
+### Qué tan buena es la capa regional
+
+Evaluada prediciendo campañas que el método no vio (2022/23 – 2025/26), con error ponderado por
+superficie:
+
+| Método | Error |
+|---|---|
+| Modelo regional | 23,0 % (±873 kg/ha) |
+| Promedio del departamento, últimas 5 campañas | 22,0 % |
+| Igual que la campaña anterior | 26,0 % |
+| Promedio nacional del cultivo | 27,3 % |
+
+En campañas normales el error es de 11–20 %; en la sequía 2022/23 sube a ~40 % para todos los
+métodos, porque ninguno sabe cómo viene el clima de la campaña. Esa es la mejora pendiente: sumar
+clima y NDVI de la campaña en curso. Frente al promedio simple, la ventaja del modelo regional es la
+cobertura: da un valor razonable aunque el departamento tenga pocas campañas o ninguna.
+
+### Actualizar los datos del MAGyP
+
+Descargar de [datosestimaciones.magyp.gob.ar](https://datosestimaciones.magyp.gob.ar) el CSV de todos
+los cultivos a nivel departamento y, desde `frontend/`:
+
+```bash
+npm run data:regional -- /ruta/a/Estimaciones.csv
+```
+
+Regenera `data/regional-yields.json` y vuelve a correr la evaluación.
+
+### Entrenar el modelo por lote
+
+Con `SUPABASE_SERVICE_ROLE_KEY` configurada. Además de entrenar, predice los lotes que todavía no
+tenían predicción:
 
 ```bash
 # Desde frontend/, con .env.local completo
@@ -71,9 +105,9 @@ npm run ml:train
 curl -X POST https://TU-DOMINIO/api/ml/train -H "Authorization: Bearer $ML_ADMIN_SECRET"
 ```
 
-En Vercel, si se define `CRON_SECRET`, el modelo se re-entrena solo todos los lunes (`vercel.json`).
+En Vercel, si se define `CRON_SECRET`, se re-entrena solo todos los lunes (`vercel.json`).
 
-Tests del modelo: `npm run test:yield-model`.
+Tests: `npm run test:yield-model`.
 
 ## Backend (legacy)
 

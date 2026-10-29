@@ -6,7 +6,8 @@ export const runtime = "nodejs"
 export const maxDuration = 60
 
 /**
- * Re-entrena el modelo de rinde con todas las cosechas de `logs` y predice los lotes pendientes.
+ * Re-entrena el modelo por lote con las cosechas de `logs` (si alcanzan) y predice los lotes que
+ * todavía no tienen predicción (con la capa regional aunque no haya modelo por lote).
  * Protegido por secreto: `Authorization: Bearer <ML_ADMIN_SECRET>` (manual) o `<CRON_SECRET>`,
  * que Vercel Cron envía solo (ver `vercel.json`).
  */
@@ -25,11 +26,10 @@ async function handle(request: Request) {
   }
 
   try {
-    const { model, backfilled } = await trainAndStoreYieldModel()
+    const { model, samples, lotModelInUse, backfilled } = await trainAndStoreYieldModel()
     return NextResponse.json({
-      trainedAt: model.trainedAt,
-      samples: model.samples,
-      metrics: model.metrics,
+      harvestSamples: samples,
+      lotModel: model ? { trainedAt: model.trainedAt, metrics: model.metrics, inUse: lotModelInUse } : null,
       backfilledPredictions: backfilled,
     })
   } catch (error) {

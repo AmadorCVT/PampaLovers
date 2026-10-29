@@ -1,10 +1,14 @@
 import assert from "node:assert/strict"
 
+import regionalYields from "../data/regional-yields.json"
+import { estimateRegionalYield, type RegionalYieldData } from "../lib/ml/regional-yield"
+import { lookupAdminLocation, type AdminLocation } from "../lib/server/georef"
 import {
   clearYieldModelCache,
   loadYieldModel,
   predictAndStorePlotYield,
   trainAndStoreYieldModel,
+  type PlotPredictionResult,
 } from "../lib/server/yield-prediction"
 
 type Row = Record<string, unknown>
@@ -91,86 +95,133 @@ class FakeSupabase {
   }
 }
 
+const REGIONAL = regionalYields as unknown as RegionalYieldData
+
 let state = 11
 const rand = () => {
   state = (state * 1664525 + 1013904223) % 4294967296
   return state / 4294967296
 }
 
-const db = new FakeSupabase()
-// 1500 cosechas (más de una página de 1000) con la forma real de `public.logs`.
-db.tables.set(
-  "logs",
-  Array.from({ length: 1500 }, (_, i) => {
-    const crop = 1 + (i % 8)
-    const ndvi = 0.2 + rand() * 0.7
-    return {
-      id: `log-${i}`,
-      plot_id: `old-${i}`,
-      crop_type: crop,
-      irrigation_type: Math.floor(rand() * 4),
-      fertilizer_type: 1 + Math.floor(rand() * 3),
-      crop_disease_status: Math.floor(rand() * 4),
-      soil_moisture: 0,
-      soil_ph: 6.5,
-      temperature_c: 22,
-      rainfall_mm: 300 + rand() * 400,
-      humidity_percent: 60,
-      sunlight_hours: 8,
-      pesticide_usage_ml: 0,
-      sowing_date: "2025-10-01",
-      harvest_date: "2026-03-20",
-      ndvi_index: ndvi,
-      // Una fila sin rinde no debe entrar al entrenamiento.
-      yield_kg_per_hectare: i === 0 ? 0 : (crop === 2 ? 7000 : 3200) * (0.6 + ndvi * 0.6),
-    }
-  }),
-)
-db.tables.set("plots", [
-  { id: "p-maiz", crop_type: "Maíz", status: "Sembrado", ndvi_index: 0.8 },
-  { id: "p-soja", crop_type: "soja", status: "Crecimiento", ndvi_index: 0.8 },
-  { id: "p-barbecho", crop_type: null, status: "Barbecho" },
-  { id: "p-con-prediccion", crop_type: "Trigo", status: "Sembrado" },
-])
-db.tables.set("plot_prediction", [{ plot_id: "p-con-prediccion", ml_predicted_kg_ha: 4100 }])
+/** Georef simulada: dos zonas conocidas por coordenadas; el resto, fuera del mapa. */
+const PERGAMINO: AdminLocation = { provinceId: "06", provinceName: "Buenos Aires", departmentId: "06623", departmentName: "Pergamino" }
+const RIVADAVIA: AdminLocation = { provinceId: "86", provinceName: "Santiago del Estero", departmentId: "86154", departmentName: "Rivadavia" }
+const locate = async (lat: number) => (lat > -34 ? PERGAMINO : lat > -40 ? RIVADAVIA : null)
 
-const admin = db as never
+const expectedRegional = (crop: number, departmentId: string, campaign: string) =>
+  estimateRegionalYield(REGIONAL, { crop, departmentId, campaign })!.kgHa
+
+function kgHa(result: PlotPredictionResult): number {
+  assert.ok(result.predictedKgHa !== null, "reason" in result ? result.reason : "sin predicción")
+  return result.predictedKgHa
+}
 
 async function main() {
-  // Sin modelo todavía: la predicción se saltea con un motivo, sin romper.
-  clearYieldModelCache()
-  assert.equal(await loadYieldModel(admin), null)
-  const before = await predictAndStorePlotYield(db as never, { id: "p-maiz", crop_type: "Maíz" }, admin)
-  assert.equal(before.predictedKgHa, null)
-  clearYieldModelCache()
+  // 0. Georef: parsea la respuesta de la API y tolera fallas.
+  const georefResponse = {
+    ubicacion: {
+      departamento: { id: "06623", nombre: "Pergamino" },
+      provincia: { id: "06", nombre: "Buenos Aires" },
+      lat: -33.89,
+      lon: -60.57,
+    },
+  }
+  const okFetch = (async () => new Response(JSON.stringify(georefResponse))) as typeof fetch
+  assert.deepEqual(await lookupAdminLocation(-33.89, -60.57, okFetch), PERGAMINO)
+  const downFetch = (async () => {
+    throw new Error("sin red")
+  }) as typeof fetch
+  assert.equal(await lookupAdminLocation(-31.1, -64.2, downFetch), null)
 
-  // Entrenar: lee las 2 páginas de logs, crea el bucket que falta, guarda el JSON y completa predicciones.
-  const { model, backfilled } = await trainAndStoreYieldModel(admin)
-  assert.equal(model.samples, 1499, "descarta la fila con rinde 0")
-  assert.deepEqual(db.bucketsCreated, ["models"])
+  // 1. Sin cosechas propias: predice igual, con el rinde regional del departamento del lote.
+  const db = new FakeSupabase()
+  db.tables.set("logs", [])
+  db.tables.set("plots", [
+    { id: "maiz-pergamino", crop_type: "Maíz", status: "Sembrado", sowing_date: "2026-09-20", latitude: -33.9, longitude: -60.6 },
+    { id: "soja-rivadavia", crop_type: "soja", status: "Sembrado", sowing_date: "2026-11-15", latitude: -35.5, longitude: -62 },
+    { id: "barbecho", crop_type: null, status: "Barbecho" },
+    { id: "ya-predicho", crop_type: "Trigo", status: "Sembrado", latitude: -33.9, longitude: -60.6 },
+  ])
+  db.tables.set("plot_prediction", [{ plot_id: "ya-predicho", ml_predicted_kg_ha: 4100 }])
+  const deps = { admin: db as never, locate }
+
+  clearYieldModelCache()
+  const first = await trainAndStoreYieldModel(deps)
+  assert.equal(first.model, null, "menos de 20 cosechas: no hay modelo por lote")
+  assert.equal(first.backfilled, 2, "maíz y soja; el barbecho no tiene cultivo y el trigo ya tenía predicción")
+  const prediction = (id: string) =>
+    db.tables.get("plot_prediction")!.filter((p) => p.plot_id === id).at(-1)!.ml_predicted_kg_ha as number
+  const maizPergamino = expectedRegional(2, "06623", "2026/27")
+  const sojaRivadavia = expectedRegional(1, "86154", "2026/27")
+  assert.equal(prediction("maiz-pergamino"), maizPergamino)
+  assert.equal(prediction("soja-rivadavia"), sojaRivadavia)
+  console.log(`regional 2026/27: maíz Pergamino ${maizPergamino} kg/ha · soja Rivadavia ${sojaRivadavia} kg/ha`)
+  assert.ok(maizPergamino > 7000 && maizPergamino < 11000, "maíz en Pergamino en el rango real de la zona")
+  assert.ok(sojaRivadavia > 1500 && sojaRivadavia < 4000)
+
+  // Sin ubicación (Georef caída o lote sin coordenadas): nivel nacional, no se rompe.
+  const national = await predictAndStorePlotYield(db as never, { id: "x", crop_type: "Maíz", latitude: -50, longitude: -70 }, deps)
+  assert.ok(national.predictedKgHa !== null && national.basis.level === "nacional")
+  const noCrop = await predictAndStorePlotYield(db as never, { id: "y", crop_type: "Quinoa" }, deps)
+  assert.equal(noCrop.predictedKgHa, null)
+
+  // 2. Con cosechas propias: en este campo el riego por goteo rinde 25% más que su zona.
+  //    La red recibe el regional como variable y tiene que aprender ese desvío.
+  const lots = Array.from({ length: 120 }, (_, i) => ({
+    id: `lote-${i}`,
+    latitude: i % 2 ? -33.9 : -35.5,
+    longitude: -61,
+  }))
+  db.tables.set("plots", [...db.tables.get("plots")!, ...lots])
+  db.tables.set(
+    "logs",
+    Array.from({ length: 1200 }, (_, i) => {
+      const lot = lots[i % lots.length]
+      const department = i % 2 ? "06623" : "86154"
+      const crop = 1 + (i % 3) // soja, maíz, trigo
+      const year = 2015 + (i % 10)
+      const sowing = `${year}-${crop === 3 ? "06" : "10"}-15`
+      const campaign = `${year}/${String((year + 1) % 100).padStart(2, "0")}`
+      const irrigation = Math.floor(rand() * 4) // 1 = goteo
+      const regional = expectedRegional(crop, department, campaign)
+      return {
+        id: `log-${i}`,
+        plot_id: lot.id,
+        crop_type: crop,
+        irrigation_type: irrigation,
+        fertilizer_type: 1 + Math.floor(rand() * 3),
+        crop_disease_status: 0,
+        sowing_date: sowing,
+        harvest_date: `${year + 1}-04-01`,
+        ndvi_index: 0.6,
+        // Una fila sin rinde no debe entrar al entrenamiento.
+        yield_kg_per_hectare: i === 0 ? 0 : regional * (irrigation === 1 ? 1.25 : 1) * (0.97 + rand() * 0.06),
+      }
+    }),
+  )
+
+  clearYieldModelCache()
+  const second = await trainAndStoreYieldModel(deps)
+  assert.equal(second.samples, 1199, "descarta la fila con rinde 0")
+  assert.ok(second.model, "con 1199 cosechas hay modelo por lote")
+  assert.deepEqual(db.bucketsCreated, ["models"], "crea el bucket que faltaba")
   assert.ok(db.files.has("models/yield-model.json"))
-  assert.equal(backfilled, 2, "solo maíz y soja: barbecho no tiene cultivo y trigo ya tenía predicción")
-  const predictions = db.tables.get("plot_prediction")!
-  const maiz = predictions.find((p) => p.plot_id === "p-maiz")!.ml_predicted_kg_ha as number
-  const soja = predictions.find((p) => p.plot_id === "p-soja")!.ml_predicted_kg_ha as number
-  console.log(`backfill: maíz ${maiz} kg/ha, soja ${soja} kg/ha — R² ${model.metrics.r2.toFixed(3)}`)
-  assert.ok(maiz > soja, "maíz > soja según los datos")
-  // Esperado por la fórmula con NDVI 0.8: maíz 7000·1.08 = 7560, soja 3200·1.08 = 3456. Los datos que
-  // faltan en el lote (fertilizante, lluvia...) se imputan y no lo sacan de lo aprendido.
-  assert.ok(Math.abs(maiz - 7560) < 400, `maíz ~7560, obtuvo ${maiz}`)
-  assert.ok(Math.abs(soja - 3456) < 300, `soja ~3456, obtuvo ${soja}`)
+  const { maeKgHa, regionalMaeKgHa } = second.model.metrics
+  console.log(`modelo por lote: error ${Math.round(maeKgHa)} kg/ha vs solo regional ${Math.round(regionalMaeKgHa!)} kg/ha`)
+  assert.ok(second.lotModelInUse, "aprende el desvío del riego, así que mejora al regional y se usa")
 
-  // Un proceso nuevo (sin caché) carga el modelo desde Storage y predice lo mismo.
+  // Un proceso nuevo (sin caché) carga el modelo desde Storage.
   clearYieldModelCache()
-  const loaded = await loadYieldModel(admin)
-  assert.deepEqual(loaded?.layers, model.layers)
-  const again = await predictAndStorePlotYield(db as never, { id: "p-maiz", crop_type: "Maíz", ndvi_index: 0.8 }, admin)
-  assert.equal(again.predictedKgHa, maiz)
-  assert.equal(predictions.filter((p) => p.plot_id === "p-maiz").length, 2, "se agrega al historial")
+  const loaded = await loadYieldModel(db as never)
+  assert.deepEqual(loaded?.layers, second.model.layers)
 
-  // Sin cultivo reconocido no se inventa una predicción.
-  const unknown = await predictAndStorePlotYield(db as never, { id: "x", crop_type: "Quinoa" }, admin)
-  assert.equal(unknown.predictedKgHa, null)
+  const plot = { crop_type: "Maíz", sowing_date: "2026-09-20", latitude: -33.9, longitude: -60.6, crop_disease_status: "None", fertilizer_type: "Mixed", ndvi_index: 0.6 }
+  const drip = await predictAndStorePlotYield(db as never, { ...plot, id: "goteo", irrigation_type: "Drip" }, deps)
+  const dry = await predictAndStorePlotYield(db as never, { ...plot, id: "seco", irrigation_type: "Manual" }, deps)
+  assert.ok(drip.predictedKgHa !== null && drip.basis.method === "regional+lotes")
+  console.log(`maíz Pergamino 2026/27: goteo ${kgHa(drip)} · manual ${kgHa(dry)} · regional ${maizPergamino} kg/ha`)
+  assert.ok(Math.abs(kgHa(drip) / kgHa(dry) - 1.25) < 0.08, "el goteo rinde ~25% más que el manual")
+  assert.ok(Math.abs(kgHa(dry) / maizPergamino - 1) < 0.08, "sin goteo, cerca del regional")
 
   console.log("test-yield-prediction-flow: OK")
 }
